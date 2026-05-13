@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# greg — multi-agent Claude Code manager
+
+set -euo pipefail
+
+GREG_HOME="${HOME}/.greg"
+SESSIONS_FILE="${GREG_HOME}/sessions.json"
+TASKS_FILE="${GREG_HOME}/tasks.json"
+MAILBOX_DIR="${GREG_HOME}/mailbox"
+DEFAULT_DIR="${HOME}/Documents/raul-virtual"
+CLAUDE_FLAGS="--dangerously-skip-permissions"
+GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
+
+# ── Init ──────────────────────────────────────────────────────────────────────
+
+_init() {
+  mkdir -p "${GREG_HOME}" "${MAILBOX_DIR}"
+  [[ -f "${SESSIONS_FILE}" ]] || echo '[]' > "${SESSIONS_FILE}"
+  [[ -f "${TASKS_FILE}" ]]    || echo '[]' > "${TASKS_FILE}"
+}
+
+_short_id() {
+  uuidgen | tr '[:upper:]' '[:lower:]' | cut -c1-8
+}
+
+_now() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+_current_session() {
+  # Auto-detect session ID if inside a greg tmux session
+  if [[ -n "${TMUX:-}" ]]; then
+    local name
+    name=$(tmux display-message -p '#S' 2>/dev/null || true)
+    if [[ "$name" == greg-* ]]; then
+      echo "$name"
+      return
+    fi
+  fi
+  echo ""
+}
+
+# ── Commands ──────────────────────────────────────────────────────────────────
+
+cmd_spawn() {
+  local dir="${DEFAULT_DIR}"
+  local name=""
+  local prompt=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dir|-d)    dir="$2";    shift 2 ;;
+      --name|-n)   name="$2";   shift 2 ;;
+      --prompt|-p) prompt="$2"; shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  local session_id="greg-$(_short_id)"
+  [[ -z "$name" ]] && name="${session_id}"
+
+  # Resolve dir
+  dir="${dir/#\~/$HOME}"
+  if [[ ! -d "$dir" ]]; then
+    echo "Error: directory not found: $dir" >&2; exit 1
+  fi
+
+  # Mailbox
+  mkdir -p "${MAILBOX_DIR}/${session_id}"
+  touch "${MAILBOX_DIR}/${session_id}/inbox.md"
+
+  # Register session
+  local entry
+  entry=$(jq -n \
+    --arg id      "$session_id" \
+    --arg name    "$name" \
+    --arg dir     "$dir" \
+    --arg started "$(_now)" \
+    '{id:$id, name:$name, dir:$dir, started:$started, status:"active"}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+
+  # Start tmux session with GREG_SESSION_ID injected
+  tmux new-session -d -s "${session_id}" \
+    -e "GREG_SESSION_ID=${session_id}" \
+    "cd '${dir}' && claude ${CLAUDE_FLAGS}"
+
+  # Inject initial prompt after claude loads
+  if [[ -n "$prompt" ]]; then
+    sleep 1.5
+    tmux send-keys -t "${session_id}" "$prompt" Enter
+  fi
+
+  echo "started  ${session_id} (${name})"
+  echo "dir      ${dir}"
+  echo "attach   greg attach ${session_id}"
+}
+
+cmd_list() {
+  echo "Sessions:"
+  if jq -e 'length > 0' "${SESSIONS_FILE}" > /dev/null 2>&1; then
+    jq -r '.[] | "  \(.id)  \(.name)  \(.dir)  [\(.status)]  \(.started)"' "${SESSIONS_FILE}"
+  else
+    echo "  (none)"
+  fi
+
+  echo ""
+  echo "Scheduled tasks:"
+  if jq -e 'length > 0' "${TASKS_FILE}" > /dev/null 2>&1; then
+    jq -r '.[] | "  \(.id)  at \(.at)  \(.prompt | .[0:60])"' "${TASKS_FILE}"
+  else
+    echo "  (none)"
+  fi
+}
+
+cmd_attach() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && { echo "Usage: greg attach <session-id>" >&2; exit 1; }
+  tmux attach -t "$id"
+}
+
+cmd_send() {
+  local to=""
+  local message=""
+  local inject=true  # send via tmux send-keys so agent sees it as user input
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --to)        to="$2";      shift 2 ;;
+      --no-inject) inject=false; shift   ;;
+      *)           message="$1"; shift   ;;
+    esac
+  done
+
+  [[ -z "$to" || -z "$message" ]] && {
+    echo "Usage: greg send --to <session-id> \"<message>\"" >&2; exit 1
+  }
+
+  local inbox="${MAILBOX_DIR}/${to}/inbox.md"
+  [[ -d "${MAILBOX_DIR}/${to}" ]] || { echo "Session not found: $to" >&2; exit 1; }
+
+  # Write to mailbox
+  echo "[$(date '+%H:%M:%S')] ${message}" >> "$inbox"
+
+  # Inject directly into the agent's terminal (agent sees it as user input)
+  if [[ "$inject" == true ]]; then
+    tmux send-keys -t "$to" "$message" Enter 2>/dev/null || {
+      echo "Warning: could not send-keys to ${to} (session may not be running)" >&2
+    }
+  fi
+
+  echo "sent → ${to}"
+}
+
+cmd_inbox() {
+  local session_id="${1:-}"
+  [[ -z "$session_id" ]] && session_id="$(_current_session)"
+  [[ -z "$session_id" ]] && {
+    echo "Usage: greg inbox <session-id>  (or run from inside a greg session)" >&2; exit 1
+  }
+
+  local inbox="${MAILBOX_DIR}/${session_id}/inbox.md"
+  if [[ -f "$inbox" && -s "$inbox" ]]; then
+    echo "=== inbox: ${session_id} ==="
+    cat "$inbox"
+  else
+    echo "(inbox empty)"
+  fi
+}
+
+cmd_kill() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && { echo "Usage: greg kill <session-id>" >&2; exit 1; }
+
+  tmux kill-session -t "$id" 2>/dev/null || true
+
+  local tmp; tmp=$(mktemp)
+  jq "map(select(.id != \"${id}\"))" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+
+  rm -rf "${MAILBOX_DIR}/${id}"
+  echo "killed ${id}"
+}
+
+cmd_schedule() {
+  local prompt=""
+  local at=""
+  local dir="${DEFAULT_DIR}"
+  local name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --prompt|-p) prompt="$2"; shift 2 ;;
+      --at)        at="$2";     shift 2 ;;
+      --dir|-d)    dir="$2";    shift 2 ;;
+      --name|-n)   name="$2";   shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  [[ -z "$prompt" || -z "$at" ]] && {
+    echo "Usage: greg schedule --prompt \"...\" --at \"YYYY-MM-DD HH:MM\" [--dir <path>] [--name <n>]" >&2
+    exit 1
+  }
+
+  local task_id="task-$(_short_id)"
+  [[ -z "$name" ]] && name="${task_id}"
+
+  # Parse datetime → cron fields (minute hour day month *)
+  local minute hour day month
+  minute=$(date -j -f '%Y-%m-%d %H:%M' "$at" '+%M' 2>/dev/null) || {
+    echo "Error: invalid date format. Use YYYY-MM-DD HH:MM" >&2; exit 1
+  }
+  hour=$(date  -j -f '%Y-%m-%d %H:%M' "$at" '+%H')
+  day=$(date   -j -f '%Y-%m-%d %H:%M' "$at" '+%d')
+  month=$(date -j -f '%Y-%m-%d %H:%M' "$at" '+%m')
+
+  # Write one-shot runner script
+  local runner="${GREG_HOME}/${task_id}.sh"
+  cat > "$runner" << RUNNER
+#!/usr/bin/env bash
+# One-shot greg task: ${task_id}
+"${GREG_BIN}" spawn --dir '${dir}' --name '${name}' --prompt '${prompt}'
+
+# Self-remove from crontab
+crontab -l 2>/dev/null | grep -v "${task_id}" | crontab -
+rm -f "${runner}"
+RUNNER
+  chmod +x "$runner"
+
+  # Add to crontab
+  (crontab -l 2>/dev/null; echo "${minute} ${hour} ${day} ${month} * '${runner}' # ${task_id}") | crontab -
+
+  # Register task
+  local entry
+  entry=$(jq -n \
+    --arg id     "$task_id" \
+    --arg name   "$name" \
+    --arg prompt "$prompt" \
+    --arg at     "$at" \
+    --arg dir    "$dir" \
+    '{id:$id, name:$name, prompt:$prompt, at:$at, dir:$dir}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$entry]" "${TASKS_FILE}" > "$tmp" && mv "$tmp" "${TASKS_FILE}"
+
+  echo "scheduled  ${task_id} (${name})"
+  echo "at         ${at}"
+  echo "cron       ${minute} ${hour} ${day} ${month} *"
+}
+
+cmd_cancel() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && { echo "Usage: greg cancel <task-id>" >&2; exit 1; }
+
+  crontab -l 2>/dev/null | grep -v "$id" | crontab - 2>/dev/null || true
+  rm -f "${GREG_HOME}/${id}.sh"
+
+  local tmp; tmp=$(mktemp)
+  jq "map(select(.id != \"${id}\"))" "${TASKS_FILE}" > "$tmp" && mv "$tmp" "${TASKS_FILE}"
+
+  echo "cancelled ${id}"
+}
+
+cmd_help() {
+  cat << 'EOF'
+greg — multi-agent Claude Code manager
+
+  spawn    [--name <n>] [--dir <path>] [--prompt <p>]     start instance now
+  schedule --prompt <p> --at "YYYY-MM-DD HH:MM"           schedule one-shot task
+             [--dir <path>] [--name <n>]
+  list                                                      show sessions & tasks
+  attach   <session-id>                                     tmux attach
+  send     --to <session-id> "<message>"                   message another agent
+  inbox    [<session-id>]                                   read inbox
+  kill     <session-id>                                     stop session
+  cancel   <task-id>                                        cancel scheduled task
+
+Default dir: ~/Documents/raul-virtual
+EOF
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+_init
+
+case "${1:-help}" in
+  spawn)    shift; cmd_spawn    "$@" ;;
+  schedule) shift; cmd_schedule "$@" ;;
+  list)     cmd_list ;;
+  attach)   shift; cmd_attach   "$@" ;;
+  send)     shift; cmd_send     "$@" ;;
+  inbox)    shift; cmd_inbox    "$@" ;;
+  kill)     shift; cmd_kill     "$@" ;;
+  cancel)   shift; cmd_cancel   "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *) echo "Unknown command: $1. Run 'greg help'" >&2; exit 1 ;;
+esac
