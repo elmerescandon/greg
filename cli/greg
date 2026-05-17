@@ -5,6 +5,7 @@ set -euo pipefail
 
 GREG_HOME="${HOME}/.greg"
 SESSIONS_FILE="${GREG_HOME}/sessions.json"
+HISTORY_FILE="${GREG_HOME}/history.json"
 TASKS_FILE="${GREG_HOME}/tasks.json"
 MAILBOX_DIR="${GREG_HOME}/mailbox"
 DEFAULT_DIR="${HOME}/Documents/raul-virtual"
@@ -16,6 +17,7 @@ GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
 _init() {
   mkdir -p "${GREG_HOME}" "${MAILBOX_DIR}"
   [[ -f "${SESSIONS_FILE}" ]] || echo '[]' > "${SESSIONS_FILE}"
+  [[ -f "${HISTORY_FILE}" ]]  || echo '[]' > "${HISTORY_FILE}"
   [[ -f "${TASKS_FILE}" ]]    || echo '[]' > "${TASKS_FILE}"
 }
 
@@ -38,6 +40,17 @@ _current_session() {
     fi
   fi
   echo ""
+}
+
+_claude_session_id_for_dir() {
+  local dir="$1"
+  # Claude encodes path by replacing every / with - (including the leading one)
+  local encoded="${dir//\//-}"
+  local claude_dir="${HOME}/.claude/projects/${encoded}"
+  if [[ -d "$claude_dir" ]]; then
+    # Most recently modified .jsonl file = last active session
+    ls -t "${claude_dir}"/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed 's/\.jsonl$//' || true
+  fi
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -111,11 +124,37 @@ cmd_list() {
   else
     echo "  (none)"
   fi
+
+  echo ""
+  echo "Recent history (last 3):"
+  if jq -e 'length > 0' "${HISTORY_FILE}" > /dev/null 2>&1; then
+    jq -r 'reverse | .[0:3][] | "  \(.id)  \(.name)  \(.ended)"' "${HISTORY_FILE}"
+  else
+    echo "  (none)"
+  fi
 }
 
 cmd_attach() {
   local id="${1:-}"
-  [[ -z "$id" ]] && { echo "Usage: greg attach <session-id>" >&2; exit 1; }
+
+  if [[ -z "$id" ]]; then
+    local -a ids labels
+    while IFS=$'\t' read -r sid sname; do
+      ids+=("$sid")
+      labels+=("$sid  ($sname)")
+    done < <(jq -r '.[] | [.id, .name] | @tsv' "${SESSIONS_FILE}" 2>/dev/null)
+
+    if [[ ${#ids[@]} -eq 0 ]]; then
+      echo "No active sessions." >&2; exit 1
+    fi
+
+    PS3="session: "
+    select choice in "${labels[@]}"; do
+      [[ -n "$choice" ]] && { id="${ids[$((REPLY - 1))]}"; break; }
+    done
+    [[ -z "$id" ]] && exit 0
+  fi
+
   tmux attach -t "$id"
 }
 
@@ -172,13 +211,101 @@ cmd_kill() {
   local id="${1:-}"
   [[ -z "$id" ]] && { echo "Usage: greg kill <session-id>" >&2; exit 1; }
 
+  # Find session entry before removing it
+  local entry
+  entry=$(jq -r "map(select(.id == \"${id}\")) | .[0]" "${SESSIONS_FILE}")
+  if [[ "$entry" == "null" || -z "$entry" ]]; then
+    echo "Session not found: $id" >&2; exit 1
+  fi
+
+  # Detect Claude session ID from project dir
+  local dir claude_sid=""
+  dir=$(echo "$entry" | jq -r '.dir')
+  claude_sid=$(_claude_session_id_for_dir "$dir")
+
+  # Archive to history
+  local archived
+  archived=$(echo "$entry" | jq \
+    --arg ended "$(_now)" \
+    --arg claude_sid "$claude_sid" \
+    '. + {status:"finished", ended:$ended, claude_session_id:$claude_sid}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$archived]" "${HISTORY_FILE}" > "$tmp" && mv "$tmp" "${HISTORY_FILE}"
+
   tmux kill-session -t "$id" 2>/dev/null || true
 
-  local tmp; tmp=$(mktemp)
+  tmp=$(mktemp)
   jq "map(select(.id != \"${id}\"))" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
 
   rm -rf "${MAILBOX_DIR}/${id}"
   echo "killed ${id}"
+  if [[ -n "$claude_sid" ]]; then
+    echo "archived  claude_session_id=${claude_sid}"
+  fi
+}
+
+cmd_start() {
+  cmd_spawn "$@"
+  local session_id
+  session_id=$(jq -r '.[-1].id' "${SESSIONS_FILE}")
+  tmux attach -t "${session_id}"
+}
+
+cmd_history() {
+  local limit=10
+  [[ "${1:-}" == "--limit" ]] && { limit="$2"; shift 2; }
+
+  if jq -e 'length > 0' "${HISTORY_FILE}" > /dev/null 2>&1; then
+    echo "Last ${limit} sessions:"
+    jq -r "reverse | .[0:${limit}][] |
+      \"  \(.id)  \(.name)  [\(.status)]  \(.started) → \(.ended)  claude:\(.claude_session_id // \"unknown\")\"" \
+      "${HISTORY_FILE}"
+  else
+    echo "  (no history)"
+  fi
+}
+
+cmd_resume() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && { echo "Usage: greg resume <session-id>" >&2; exit 1; }
+
+  local entry
+  entry=$(jq -r "map(select(.id == \"${id}\")) | .[0]" "${HISTORY_FILE}")
+  if [[ "$entry" == "null" || -z "$entry" ]]; then
+    echo "Session not found in history: $id" >&2; exit 1
+  fi
+
+  local claude_sid dir name
+  claude_sid=$(echo "$entry" | jq -r '.claude_session_id // empty')
+  dir=$(echo "$entry" | jq -r '.dir')
+  name=$(echo "$entry" | jq -r '.name')
+
+  [[ -z "$claude_sid" ]] && {
+    echo "No claude_session_id stored for ${id} — cannot resume" >&2; exit 1
+  }
+
+  local new_id="greg-$(_short_id)"
+  mkdir -p "${MAILBOX_DIR}/${new_id}"
+  touch "${MAILBOX_DIR}/${new_id}/inbox.md"
+
+  local new_entry
+  new_entry=$(jq -n \
+    --arg id          "$new_id" \
+    --arg name        "$name" \
+    --arg dir         "$dir" \
+    --arg started     "$(_now)" \
+    --arg resumed_from "$id" \
+    '{id:$id, name:$name, dir:$dir, started:$started, status:"active", resumed_from:$resumed_from}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$new_entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+
+  tmux new-session -d -s "${new_id}" \
+    -e "GREG_SESSION_ID=${new_id}" \
+    "cd '${dir}' && claude ${CLAUDE_FLAGS} --resume '${claude_sid}'"
+
+  echo "resumed  ${new_id} (from ${id})"
+  echo "claude   ${claude_sid}"
+  echo "attach   greg attach ${new_id}"
 }
 
 cmd_schedule() {
@@ -264,14 +391,17 @@ cmd_help() {
   cat << 'EOF'
 greg — multi-agent Claude Code manager
 
-  spawn    [--name <n>] [--dir <path>] [--prompt <p>]     start instance now
+  start    [--name <n>] [--dir <path>] [--prompt <p>]     start instance & attach immediately
+  spawn    [--name <n>] [--dir <path>] [--prompt <p>]     start instance in background
+  resume   <session-id>                                     resume a past session
   schedule --prompt <p> --at "YYYY-MM-DD HH:MM"           schedule one-shot task
              [--dir <path>] [--name <n>]
-  list                                                      show sessions & tasks
+  list                                                      show sessions, tasks & recent history
+  history  [--limit N]                                      show last N finished sessions (default 10)
   attach   <session-id>                                     tmux attach
   send     --to <session-id> "<message>"                   message another agent
   inbox    [<session-id>]                                   read inbox
-  kill     <session-id>                                     stop session
+  kill     <session-id>                                     stop & archive session
   cancel   <task-id>                                        cancel scheduled task
 
 Default dir: ~/Documents/raul-virtual
@@ -283,8 +413,11 @@ EOF
 _init
 
 case "${1:-help}" in
+  start)    shift; cmd_start    "$@" ;;
   spawn)    shift; cmd_spawn    "$@" ;;
+  resume)   shift; cmd_resume   "$@" ;;
   schedule) shift; cmd_schedule "$@" ;;
+  history)  shift; cmd_history  "$@" ;;
   list)     cmd_list ;;
   attach)   shift; cmd_attach   "$@" ;;
   send)     shift; cmd_send     "$@" ;;
