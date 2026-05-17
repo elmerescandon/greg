@@ -2,7 +2,7 @@
 set -e
 
 SESSION="greg-ui"
-VAULT="$HOME/Documents/raul-virtual"
+VAULT="${GREG_VAULT:-$HOME}"
 UI_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Si ya existe la sesión, reattach

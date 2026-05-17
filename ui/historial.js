@@ -13,7 +13,7 @@ const SESSIONS_FILE = path.join(GREG_HOME, 'sessions.json');
 const HISTORY_FILE  = path.join(GREG_HOME, 'history.json');
 const MAILBOX_DIR   = path.join(GREG_HOME, 'mailbox');
 const CMD_FILE      = path.join(GREG_HOME, 'ui-cmd.json');
-const VAULT         = path.join(os.homedir(), 'Documents', 'raul-virtual');
+const VAULT         = process.env.GREG_VAULT || os.homedir();
 const TMUX_SESSION  = 'greg-ui';
 
 const screen = blessed.screen({ smartCSR: true, fullUnicode: true });

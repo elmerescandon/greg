@@ -7,7 +7,7 @@ const fs        = require('fs');
 const path      = require('path');
 const os        = require('os');
 
-const VAULT        = path.join(os.homedir(), 'Documents', 'raul-virtual');
+const VAULT        = process.env.GREG_VAULT || os.homedir();
 const GREG_HOME    = path.join(os.homedir(), '.greg');
 const SESSION_FILE = path.join(GREG_HOME, 'claude-ui-session');
 const CMD_FILE     = path.join(GREG_HOME, 'ui-cmd.json');

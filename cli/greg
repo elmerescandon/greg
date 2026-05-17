@@ -8,7 +8,7 @@ SESSIONS_FILE="${GREG_HOME}/sessions.json"
 HISTORY_FILE="${GREG_HOME}/history.json"
 TASKS_FILE="${GREG_HOME}/tasks.json"
 MAILBOX_DIR="${GREG_HOME}/mailbox"
-DEFAULT_DIR="${HOME}/Documents/raul-virtual"
+DEFAULT_DIR="${GREG_VAULT:-$HOME}"
 CLAUDE_FLAGS="--dangerously-skip-permissions"
 GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
 
@@ -404,7 +404,7 @@ greg — multi-agent Claude Code manager
   kill     <session-id>                                     stop & archive session
   cancel   <task-id>                                        cancel scheduled task
 
-Default dir: ~/Documents/raul-virtual
+Default dir: $GREG_VAULT (or $HOME if not set)
 EOF
 }
 
