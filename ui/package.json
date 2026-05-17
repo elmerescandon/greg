@@ -1,0 +1,14 @@
+{
+  "name": "greg-ui",
+  "version": "0.1.0",
+  "description": "Greg terminal layout — historial | claude-code | terminal",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "node-pty": "^1.0.0",
+    "term.js": "^0.0.7"
+  }
+}
