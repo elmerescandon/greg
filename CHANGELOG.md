@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-05-17
+
+### Added
+
+**UI — claude-panel.js**
+- `AskUserQuestion` interactive widget — when Greg generates selection prompts, a bordered overlay appears above the input showing the question and options; navigate with `↑/↓`, confirm with `Enter`, cancel with `Esc`
+- Multi-question sequences supported: questions are presented one at a time, answers collected and written to the process stdin as JSON on completion
+- Overlay position adjusts dynamically when input box height changes (multiline input)
+- Overlay auto-hides if the process closes while a question is pending
+
+### Changed
+- UI branding renamed from "claude" to "Greg" across status bar, title, welcome and new-session messages
+- Process `stdio` changed from `['ignore', ...]` to `['pipe', ...]` to support mid-run stdin writes for tool interactions
+
 ## [0.3.0] - 2026-05-17
 
 ### Added

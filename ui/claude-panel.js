@@ -35,7 +35,7 @@ const cliArgs         = process.argv.slice(2);
 const argClaudeSession = cliArgs[cliArgs.indexOf('--claude-session') + 1] || null;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
-const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'claude', mouse: true });
+const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'Greg', mouse: true });
 
 const statusBar = blessed.box({
   parent: screen, top: 0, left: 0,
@@ -79,6 +79,17 @@ const inputLine = blessed.box({
   style: { bg: '#1a1a1a' },
 });
 
+const questionOverlay = blessed.box({
+  parent: screen,
+  bottom: 7, left: 0,
+  width: '100%', height: 10,
+  tags: true,
+  border: { type: 'line' },
+  style: { bg: '#0d1117', border: { fg: '#3377ff' } },
+  padding: { left: 1, right: 1 },
+  hidden: true,
+});
+
 blessed.line({
   parent: screen, bottom: 1, left: 0,
   width: '100%', orientation: 'horizontal',
@@ -112,6 +123,7 @@ function createTab(name, claudeSession) {
     contextWindow: null,
     compactWarned: false,
     compactPending: false,
+    pendingQuestion: null,
   };
 }
 
@@ -172,6 +184,7 @@ function switchTab(newIdx) {
   output.setScrollPerc(100);
   renderTabBar();
   renderStatus();
+  renderQuestionOverlay();
 
   if (tab().compactPending && !tab().running) {
     tab().compactPending = false;
@@ -211,7 +224,7 @@ function newTab(name, claudeSession, gregSessionId) {
     tabLog(`{gray-fg}retomando ${name} (contexto preservado){/}`);
     tabLog('');
   } else {
-    tabLog('{gray-fg}nueva sesión de claude{/}');
+    tabLog('{gray-fg}nueva sesión de Greg{/}');
     tabLog('');
   }
   renderInput();
@@ -238,9 +251,9 @@ function renderStatus() {
   const ctx  = t.contextPct !== null ? ` ${ctxColor(t.contextPct, t.contextTokens, t.contextWindow)}` : '';
 
   if (t.running) {
-    statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}claude{/} {gray-fg}${sid}{/}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
+    statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}Greg{/} {gray-fg}${sid}{/}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
   } else {
-    statusBar.setContent(`  {green-fg}●{/} {bold}claude{/} {gray-fg}${sid}{/}${cost}${ctx}`);
+    statusBar.setContent(`  {green-fg}●{/} {bold}Greg{/} {gray-fg}${sid}{/}${cost}${ctx}`);
   }
   screen.render();
 }
@@ -290,7 +303,13 @@ function renderInput() {
   const inputHeight = visibleLines + 2;
   inputLine.height = inputHeight;
   inputLine.bottom = 2;
-  output.bottom = inputHeight + 2;
+  if (tab().pendingQuestion) {
+    const overlayH = questionOverlay.height || 10;
+    questionOverlay.bottom = inputHeight + 2;
+    output.bottom = inputHeight + 2 + overlayH;
+  } else {
+    output.bottom = inputHeight + 2;
+  }
 
   // Renderizar con cursor
   const before     = inputBuf.slice(0, cursorPos);
@@ -344,7 +363,7 @@ function send(text) {
   ];
   if (t.claudeSession) args.push('--resume', t.claudeSession);
 
-  t.proc = spawn('claude', args, { cwd: VAULT, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.proc = spawn('claude', args, { cwd: VAULT, stdio: ['pipe', 'pipe', 'pipe'] });
   let buf = '';
 
   t.proc.stdout.on('data', chunk => {
@@ -365,6 +384,10 @@ function send(text) {
     currentAction = '';
     const anyRunning = tabs.some(tb => tb.running);
     if (!anyRunning) stopSpinner();
+    if (t.pendingQuestion) {
+      t.pendingQuestion = null;
+      if (t === tab()) renderQuestionOverlay();
+    }
     tabLog('', t);
     renderStatus();
     renderTabBar();
@@ -419,9 +442,13 @@ function handleEvent(raw, t) {
           b.text.split('\n').forEach(l => tabLog(escTags(l), t));
         }
         if (b.type === 'tool_use') {
-          const label = formatToolLabel(b.name, b.input);
-          currentAction = `${b.name}…`;
-          tabLog(`{yellow-fg}⚙ ${b.name}{/} {gray-fg}${escTags(label)}{/}`, t);
+          if (b.name === 'AskUserQuestion' && b.input?.questions?.length) {
+            showQuestion(b, t);
+          } else {
+            const label = formatToolLabel(b.name, b.input);
+            currentAction = `${b.name}…`;
+            tabLog(`{yellow-fg}⚙ ${b.name}{/} {gray-fg}${escTags(label)}{/}`, t);
+          }
         }
       }
       screen.render();
@@ -529,6 +556,34 @@ screen.on('keypress', (ch, key) => {
       cursorPos = inputBuf.length;
       syncInput();
       renderInput();
+    }
+    return;
+  }
+
+  // Navegación de pregunta interactiva
+  if (tab().pendingQuestion) {
+    const pq = tab().pendingQuestion;
+    if (key.name === 'up') {
+      pq.selectedIdx = Math.max(0, pq.selectedIdx - 1);
+      renderQuestionOverlay();
+      return;
+    }
+    if (key.name === 'down') {
+      const maxIdx = (pq.questions[pq.currentQ]?.options?.length || 1) - 1;
+      pq.selectedIdx = Math.min(maxIdx, pq.selectedIdx + 1);
+      renderQuestionOverlay();
+      return;
+    }
+    if (key.name === 'enter' || key.name === 'return') {
+      submitAnswer();
+      return;
+    }
+    if (key.full === 'escape') {
+      tab().pendingQuestion = null;
+      questionOverlay.hide();
+      output.bottom = (inputLine.height || 3) + 2;
+      screen.render();
+      return;
     }
     return;
   }
@@ -644,12 +699,96 @@ function extractResult(b) {
   return '';
 }
 
+function showQuestion(block, t) {
+  t.pendingQuestion = {
+    id: block.id,
+    questions: block.input.questions,
+    currentQ: 0,
+    selectedIdx: 0,
+    answers: {},
+  };
+  const firstQ = t.pendingQuestion.questions[0];
+  tabLog('', t);
+  tabLog(`{cyan-fg}? ${escTags(firstQ.question)}{/}`, t);
+  tabLog('', t);
+  if (t === tab()) renderQuestionOverlay();
+}
+
+function renderQuestionOverlay() {
+  const t = tab();
+  const q = t.pendingQuestion;
+  const inputH = inputLine.height || 3;
+
+  if (!q) {
+    questionOverlay.hide();
+    output.bottom = inputH + 2;
+    screen.render();
+    return;
+  }
+
+  const qData = q.questions[q.currentQ];
+  const lines = [];
+  lines.push(`{bold}${escTags(qData.question)}{/}`);
+  lines.push('');
+  qData.options.forEach((opt, i) => {
+    const sel = i === q.selectedIdx;
+    const marker = sel ? '{green-fg}▶{/}' : ' ';
+    const label  = sel ? `{bold}{white-fg}${escTags(opt.label)}{/}{/}` : `{gray-fg}${escTags(opt.label)}{/}`;
+    const desc   = opt.description ? `  {gray-fg}${escTags(opt.description.slice(0, 65))}{/}` : '';
+    lines.push(`  ${marker} ${label}${desc}`);
+  });
+  lines.push('');
+  const multi = qData.multiSelect ? '  Space marcar múltiples' : '';
+  lines.push(`{gray-fg}  ↑/↓ navegar  Enter confirmar${multi}  Esc cancelar{/}`);
+
+  const overlayH = lines.length + 2;
+  questionOverlay.height = overlayH;
+  questionOverlay.bottom = inputH + 2;
+  questionOverlay.setLabel(` {cyan-fg}${escTags(qData.header || 'Selección')}{/} `);
+  questionOverlay.setContent(lines.join('\n'));
+  output.bottom = inputH + 2 + overlayH;
+
+  questionOverlay.show();
+  screen.render();
+}
+
+function submitAnswer() {
+  const t = tab();
+  const q = t.pendingQuestion;
+  if (!q) return;
+
+  const qData = q.questions[q.currentQ];
+  const selected = qData.options[q.selectedIdx];
+  q.answers[qData.question] = selected.label;
+  tabLog(`{green-fg}  ✓ ${escTags(selected.label)}{/}`, t);
+
+  q.currentQ++;
+  if (q.currentQ < q.questions.length) {
+    q.selectedIdx = 0;
+    const next = q.questions[q.currentQ];
+    tabLog('', t);
+    tabLog(`{cyan-fg}? ${escTags(next.question)}{/}`, t);
+    tabLog('', t);
+    if (t === tab()) renderQuestionOverlay();
+  } else {
+    t.pendingQuestion = null;
+    questionOverlay.hide();
+    const inputH = inputLine.height || 3;
+    output.bottom = inputH + 2;
+    if (t.proc && t.proc.stdin) {
+      t.proc.stdin.write(JSON.stringify({ answers: q.answers }) + '\n');
+    }
+    tabLog('', t);
+    screen.render();
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 const t = tab();
 
 renderStatus();
 renderTabBar();
-tabLog('{gray-fg}claude panel — escribe tu mensaje y presiona Enter{/}');
+tabLog('{gray-fg}Greg — escribe tu mensaje y presiona Enter{/}');
 if (t.claudeSession) tabLog(`{gray-fg}sesión previa cargada: ${t.claudeSession.slice(0, 8)}…{/}`);
 tabLog('');
 renderInput();
