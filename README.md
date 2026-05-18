@@ -89,6 +89,33 @@ greg kill greg-xxxxxxxx             # stop and archive session
 greg schedule --prompt "run tests" --at "2026-01-15 09:00"
 ```
 
+### Multi-agent tasks
+
+Launch a team of parallel agents that collaborate via a shared workspace:
+
+```bash
+greg task run \
+  --goal "Research report on LLMs in 2026" \
+  --agent "models:Analyze benchmarks and model capabilities" \
+  --agent "research:Analyze academic research trends" \
+  --agent "industry:Analyze industry adoption and use cases"
+
+greg task list                         # show all tasks with agent statuses grouped
+greg task status mtask-xxxxxxxx        # detailed status: agents, coordinator, sessions
+greg task recover mtask-xxxxxxxx       # unblock a task if an agent crashed mid-work
+```
+
+**How it works:**
+
+1. A **director** agent is auto-added to coordinate the team
+2. All agents run in parallel, each in its own tmux session
+3. Agents write to `~/.greg/multi-tasks/<task-id>/workspace/<agent>.md` progressively
+4. Agents can message each other via `messages/<from>→<to>.md`
+5. A background **coordinator** polls status files every 15s
+6. When all agents write `done`, the coordinator spawns a **synthesizer** that produces `final-output.md`
+
+**Resilience:** If an agent's session crashes before writing `done`, the coordinator detects this and auto-recovers after 120 seconds. Use `greg task recover` to force immediate recovery.
+
 ### UI
 
 ```bash

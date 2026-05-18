@@ -55,21 +55,20 @@ const output = blessed.log({
   parent: screen, top: 2, left: 0,
   width: '100%', bottom: 5,
   tags: true, scrollable: true, alwaysScroll: false,
-  mouse: true,
   padding: { left: 1, right: 1 },
   scrollbar: { ch: '▐', style: { fg: '#333' } },
 });
 
-output.on('wheelup', () => {
-  tab().scrollLock = true;
-  output.scroll(-3);
-  screen.render();
-});
-
-output.on('wheeldown', () => {
-  output.scroll(3);
-  if (output.getScrollPerc() >= 99) tab().scrollLock = false;
-  screen.render();
+screen.on('mouse', data => {
+  if (data.action === 'wheelup') {
+    tab().scrollLock = true;
+    output.scroll(-2);
+    screen.render();
+  } else if (data.action === 'wheeldown') {
+    output.scroll(2);
+    if (output.getScrollPerc() >= 99) tab().scrollLock = false;
+    screen.render();
+  }
 });
 
 const inputLine = blessed.box({
@@ -90,7 +89,7 @@ blessed.box({
   parent: screen, bottom: 0, left: 0,
   width: '100%', height: 1,
   tags: true,
-  content: '  {gray-fg}Enter enviar  Alt+Enter nueva línea  PgUp/PgDn scroll  Ctrl+Shift+←/→ tabs  Ctrl+T nueva  Ctrl+W cerrar  Ctrl+Q salir{/}',
+  content: '  {gray-fg}Enter enviar  Alt+Enter nueva línea  Ctrl+↑/↓ scroll  PgUp/PgDn saltar  Ctrl+Shift+←/→ tabs  Ctrl+T nueva  Ctrl+W cerrar  Ctrl+K compactar  Ctrl+Q salir{/}',
   style: { bg: '#111' },
 });
 
@@ -102,11 +101,15 @@ function createTab(name, claudeSession) {
     content: '',
     lines: [],
     scrollLock: false,
+    hasNew: false,
     inputBuf: '',
+    cursorPos: 0,
     running: false,
     proc: null,
     cost: 0,
     contextPct: null,
+    compactWarned: false,
+    compactPending: false,
   };
 }
 
@@ -141,8 +144,9 @@ function renderTabBar() {
   const parts = tabs.map((t, i) => {
     const active  = i === tabIdx;
     const spinner = t.running ? `{yellow-fg}${FRAMES[spinIdx]}{/} ` : '';
+    const badge   = !active && t.hasNew ? ' {green-fg}●{/}' : '';
     if (active) return `{bold}{cyan-fg} ${t.name} {/}{/}${spinner}`;
-    return `{gray-fg} ${t.name} {/}`;
+    return `{gray-fg} ${t.name}${badge} {/}`;
   });
   tabBar.setContent('  ' + parts.join('{gray-fg} │ {/}'));
   screen.render();
@@ -152,17 +156,30 @@ function switchTab(newIdx) {
   if (newIdx < 0 || newIdx >= tabs.length) return;
   // Guardar estado del tab actual
   if (tabs[tabIdx]) {
-    tabs[tabIdx].content  = output.getContent();
-    tabs[tabIdx].inputBuf = inputBuf;
+    tabs[tabIdx].content   = output.getContent();
+    tabs[tabIdx].inputBuf  = inputBuf;
+    tabs[tabIdx].cursorPos = cursorPos;
   }
-  tabIdx   = newIdx;
-  inputBuf = tab().inputBuf;
+  tabIdx    = newIdx;
+  inputBuf  = tab().inputBuf;
+  cursorPos = tab().cursorPos;
+  tab().hasNew = false;
   output.setContent(tab().content);
   for (const line of tab().lines) output.log(line);
   tab().lines = [];
   output.setScrollPerc(100);
   renderTabBar();
   renderStatus();
+
+  if (tab().compactPending && !tab().running) {
+    tab().compactPending = false;
+    tab().compactWarned  = false;
+    tabLog('{red-fg}⚡ contexto al límite — escribe qué quieres preservar y presiona Enter{/}');
+    inputBuf  = '/compact ';
+    cursorPos = inputBuf.length;
+    syncInput();
+  }
+
   renderInput();
   screen.render();
 }
@@ -170,7 +187,7 @@ function switchTab(newIdx) {
 function closeTab() {
   if (tabs.length === 1) return;
   const t = tab();
-  if (t.proc) t.proc.kill('SIGINT');
+  if (t.gregSessionId) spawn('greg', ['kill', t.gregSessionId], { stdio: 'ignore' }).unref();
   const newIdx = tabIdx > 0 ? tabIdx - 1 : 0;
   tabs.splice(tabIdx, 1);
   tabIdx   = newIdx;
@@ -202,11 +219,17 @@ function newTab(name, claudeSession, gregSessionId) {
 // ── Session ───────────────────────────────────────────────────────────────────
 let globalCost = 0;
 
+function ctxColor(pct) {
+  if (pct >= 90) return `{red-fg}ctx:${pct}%{/}`;
+  if (pct >= 75) return `{yellow-fg}ctx:${pct}%{/}`;
+  return `{gray-fg}ctx:${pct}%{/}`;
+}
+
 function renderStatus() {
   const t   = tab();
   const sid = t.gregSessionId ? t.gregSessionId.replace(/^greg-/, '') : '—';
   const cost = globalCost > 0 ? ` {gray-fg}$${globalCost.toFixed(3)}{/}` : '';
-  const ctx  = t.contextPct !== null ? ` {gray-fg}ctx:${t.contextPct}%{/}` : '';
+  const ctx  = t.contextPct !== null ? ` ${ctxColor(t.contextPct)}` : '';
 
   if (t.running) {
     statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}claude{/} {gray-fg}${sid}{/}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
@@ -243,29 +266,51 @@ function tabLog(line, t) {
     if (!tab().scrollLock) output.setScrollPerc(100);
   } else {
     t.lines.push(line);
+    t.hasNew = true;
+    renderTabBar();
   }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
-let inputBuf = '';  // sincronizado con tab().inputBuf
+let inputBuf = '';
+let cursorPos = 0;
+const inputHistory = [];
+let historyIdx = -1;
+let savedInput = '';
 
 function renderInput() {
-  const lines = inputBuf.split('\n');
-  const visibleLines = Math.min(MAX_INPUT_LINES, lines.length);
-  const inputHeight = visibleLines + 2; // +2 margen visual
+  const rawLines = inputBuf.split('\n');
+  const visibleLines = Math.min(MAX_INPUT_LINES, rawLines.length);
+  const inputHeight = visibleLines + 2;
   inputLine.height = inputHeight;
   inputLine.bottom = 2;
-  output.bottom = inputHeight + 2; // +2 = separador + barra de ayuda
+  output.bottom = inputHeight + 2;
 
+  // Renderizar con cursor
+  const before     = inputBuf.slice(0, cursorPos);
+  const cursorChar = inputBuf[cursorPos];
+  const after      = inputBuf.slice(cursorPos + (cursorChar !== undefined ? 1 : 0));
+
+  let full;
+  if (cursorChar === '\n') {
+    full = escTags(before) + '{inverse} {/}\n' + escTags(after);
+  } else if (cursorChar !== undefined) {
+    full = escTags(before) + `{inverse}${escTags(cursorChar)}{/}` + escTags(after);
+  } else {
+    full = escTags(before) + '{inverse} {/}';
+  }
+
+  const lines = full.split('\n');
   const content = lines
-    .map((l, i) => (i === 0 ? `{gray-fg}>{/} ${escTags(l)}` : `  ${escTags(l)}`))
+    .map((l, i) => (i === 0 ? `{gray-fg}>{/} ${l}` : `  ${l}`))
     .join('\n');
   inputLine.setContent(content);
   screen.render();
 }
 
 function syncInput() {
-  tab().inputBuf = inputBuf;
+  tab().inputBuf  = inputBuf;
+  tab().cursorPos = cursorPos;
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────
@@ -273,8 +318,10 @@ function send(text) {
   const t = tab();
   if (!text.trim() || t.running) return;
 
+  if (text.trim()) { inputHistory.push(text); historyIdx = -1; savedInput = ''; }
   t.running = true;
   inputBuf  = '';
+  cursorPos = 0;
   currentAction = 'pensando…';
   renderInput();
 
@@ -315,6 +362,20 @@ function send(text) {
     tabLog('', t);
     renderStatus();
     renderTabBar();
+
+    if (t.compactPending) {
+      tabLog('{red-fg}⚡ contexto al límite — escribe qué quieres preservar y presiona Enter{/}', t);
+      screen.render();
+      if (t === tab()) {
+        t.compactPending = false;
+        t.compactWarned  = false;
+        inputBuf  = '/compact ';
+        cursorPos = inputBuf.length;
+        syncInput();
+        renderInput();
+      }
+      // Si es background tab, compactPending queda activo hasta que se haga switch
+    }
   });
 }
 
@@ -383,6 +444,17 @@ function handleEvent(raw, t) {
         if (m) {
           const used = (m.inputTokens || 0) + (m.cacheReadInputTokens || 0) + (m.cacheCreationInputTokens || 0);
           t.contextPct = Math.round(used / m.contextWindow * 100);
+
+          if (t.contextPct < 75) {
+            t.compactWarned = false;
+            t.compactPending = false;
+          } else if (t.contextPct >= 95) {
+            t.compactPending = true;
+          } else if (t.contextPct >= 90 && !t.compactWarned) {
+            t.compactWarned = true;
+            tabLog(`{yellow-fg}⚠ contexto al ${t.contextPct}% — Ctrl+K para compactar{/}`, t);
+            screen.render();
+          }
         }
         // Acumular output tokens y costo en la sesión de Greg
         if (t.gregSessionId) {
@@ -409,7 +481,9 @@ function handleEvent(raw, t) {
 }
 
 // ── IPC desde historial ───────────────────────────────────────────────────────
+// Inicializar con mtime actual para ignorar comandos previos al inicio
 let cmdMtime = 0;
+try { cmdMtime = fs.statSync(CMD_FILE).mtimeMs; } catch {}
 setInterval(() => {
   try {
     const stat = fs.statSync(CMD_FILE);
@@ -432,6 +506,19 @@ screen.on('keypress', (ch, key) => {
     return;
   }
 
+  if (key.full === 'C-k') {
+    const t = tab();
+    if (!t.running) {
+      t.compactWarned  = false;
+      t.compactPending = false;
+      inputBuf  = '/compact ';
+      cursorPos = inputBuf.length;
+      syncInput();
+      renderInput();
+    }
+    return;
+  }
+
   // Scroll del output
   if (key.name === 'pageup') {
     tab().scrollLock = true;
@@ -441,6 +528,18 @@ screen.on('keypress', (ch, key) => {
   }
   if (key.name === 'pagedown') {
     output.scroll(Math.floor(output.height / 2));
+    if (output.getScrollPerc() >= 99) tab().scrollLock = false;
+    screen.render();
+    return;
+  }
+  if (key.name === 'up' && key.ctrl) {
+    tab().scrollLock = true;
+    output.scroll(-3);
+    screen.render();
+    return;
+  }
+  if (key.name === 'down' && key.ctrl) {
+    output.scroll(3);
     if (output.getScrollPerc() >= 99) tab().scrollLock = false;
     screen.render();
     return;
@@ -464,12 +563,34 @@ screen.on('keypress', (ch, key) => {
 
   if (tab().running) return;
 
+  // Historial de inputs con ↑/↓
+  if (key.name === 'up' && !key.ctrl && !key.shift && !key.meta) {
+    if (inputHistory.length === 0) return;
+    if (historyIdx === -1) savedInput = inputBuf;
+    historyIdx = Math.min(historyIdx + 1, inputHistory.length - 1);
+    inputBuf = inputHistory[inputHistory.length - 1 - historyIdx];
+    cursorPos = inputBuf.length;
+    syncInput(); renderInput(); return;
+  }
+  if (key.name === 'down' && !key.ctrl && !key.shift && !key.meta) {
+    if (historyIdx === -1) return;
+    historyIdx--;
+    inputBuf  = historyIdx === -1 ? savedInput : inputHistory[inputHistory.length - 1 - historyIdx];
+    cursorPos = inputBuf.length;
+    syncInput(); renderInput(); return;
+  }
+
+  // Cursor ←/→
+  if (key.name === 'left'  && !key.ctrl && !key.shift) { cursorPos = Math.max(0, cursorPos - 1); syncInput(); renderInput(); return; }
+  if (key.name === 'right' && !key.ctrl && !key.shift) { cursorPos = Math.min(inputBuf.length, cursorPos + 1); syncInput(); renderInput(); return; }
+  if (key.name === 'home') { cursorPos = 0; syncInput(); renderInput(); return; }
+  if (key.name === 'end')  { cursorPos = inputBuf.length; syncInput(); renderInput(); return; }
+
   // Alt+Enter = nueva línea en el input
   if ((key.full === 'M-return' || key.full === 'M-enter' || (key.meta && (key.name === 'return' || key.name === 'enter')))) {
-    inputBuf += '\n';
-    syncInput();
-    renderInput();
-    return;
+    inputBuf = inputBuf.slice(0, cursorPos) + '\n' + inputBuf.slice(cursorPos);
+    cursorPos++;
+    syncInput(); renderInput(); return;
   }
 
   if (key.name === 'enter' || key.name === 'return') {
@@ -478,9 +599,13 @@ screen.on('keypress', (ch, key) => {
   }
 
   if (key.name === 'backspace') {
-    inputBuf = inputBuf.slice(0, -1);
+    if (cursorPos > 0) {
+      inputBuf  = inputBuf.slice(0, cursorPos - 1) + inputBuf.slice(cursorPos);
+      cursorPos--;
+    }
   } else if (ch && !key.ctrl && !key.meta && ch.length === 1) {
-    inputBuf += ch;
+    inputBuf  = inputBuf.slice(0, cursorPos) + ch + inputBuf.slice(cursorPos);
+    cursorPos++;
   }
 
   syncInput();

@@ -8,6 +8,8 @@ SESSIONS_FILE="${GREG_HOME}/sessions.json"
 HISTORY_FILE="${GREG_HOME}/history.json"
 TASKS_FILE="${GREG_HOME}/tasks.json"
 MAILBOX_DIR="${GREG_HOME}/mailbox"
+MULTI_TASKS_DIR="${GREG_HOME}/multi-tasks"
+SKILLS_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../skills"
 DEFAULT_DIR="${GREG_VAULT:-$HOME}"
 CLAUDE_FLAGS="--dangerously-skip-permissions"
 GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
@@ -15,10 +17,196 @@ GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 _init() {
-  mkdir -p "${GREG_HOME}" "${MAILBOX_DIR}"
+  mkdir -p "${GREG_HOME}" "${MAILBOX_DIR}" "${MULTI_TASKS_DIR}"
   [[ -f "${SESSIONS_FILE}" ]] || echo '[]' > "${SESSIONS_FILE}"
   [[ -f "${HISTORY_FILE}" ]]  || echo '[]' > "${HISTORY_FILE}"
   [[ -f "${TASKS_FILE}" ]]    || echo '[]' > "${TASKS_FILE}"
+}
+
+# ── Multi-task helpers ────────────────────────────────────────────────────────
+
+_resolve_skill() {
+  local skill_file="$1"
+  local task_id="$2"
+  local agent_id="$3"
+  local agent_role="$4"
+  local task_goal="$5"
+  local workspace="$6"
+
+  # Read mailbox skill and inline it (resolve {{> greg-mailbox}})
+  local mailbox_content
+  mailbox_content=$(cat "${SKILLS_DIR}/greg-mailbox.md")
+
+  local content
+  content=$(cat "${skill_file}")
+
+  # Replace partial include
+  content="${content//'{{> greg-mailbox}}'/$mailbox_content}"
+
+  # Replace variables
+  content="${content//'{{TASK_ID}}'/$task_id}"
+  content="${content//'{{AGENT_ID}}'/$agent_id}"
+  content="${content//'{{AGENT_ROLE}}'/$agent_role}"
+  content="${content//'{{TASK_GOAL}}'/$task_goal}"
+  content="${content//'{{WORKSPACE}}'/$workspace}"
+
+  echo "$content"
+}
+
+_spawn_agent() {
+  local session_id="$1"
+  local name="$2"
+  local workspace="$3"
+  local prompt="$4"
+
+  mkdir -p "${MAILBOX_DIR}/${session_id}"
+  touch "${MAILBOX_DIR}/${session_id}/inbox.md"
+
+  local entry
+  entry=$(jq -n \
+    --arg id      "$session_id" \
+    --arg name    "$name" \
+    --arg dir     "$workspace" \
+    --arg started "$(_now)" \
+    '{id:$id, name:$name, dir:$dir, started:$started, status:"active"}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+
+  # Write prompt to a temp file to avoid shell escaping issues
+  local prompt_file; prompt_file=$(mktemp /tmp/greg-prompt-XXXXXX)
+  printf '%s' "$prompt" > "$prompt_file"
+
+  tmux new-session -d -s "${session_id}" \
+    -e "GREG_SESSION_ID=${session_id}" \
+    "cd '${workspace}' && claude ${CLAUDE_FLAGS} < '${prompt_file}'; rm -f '${prompt_file}'"
+}
+
+_coordinator_loop() {
+  local task_id="$1"
+  local workspace="$2"
+  shift 2
+  local agent_ids=("$@")
+
+  local status_dir="${workspace}/status"
+  # Timeout: if a tmux session is dead and agent has output, treat as done after this many seconds
+  local dead_session_timeout=120
+  # Track first-dead timestamps as "aid:timestamp" entries in a plain string
+  local first_dead_list=""
+
+  echo "[$(date '+%H:%M:%S')] coordinator started (pid $$) — watching: ${agent_ids[*]}" \
+    >> "${workspace}/coordinator.log"
+
+  local all_done=false
+  while [[ "$all_done" == false ]]; do
+    sleep 15
+    all_done=true
+
+    local wmf="${workspace}/manifest.json"
+    for aid in "${agent_ids[@]}"; do
+      local sf="${status_dir}/${aid}.status"
+      local agent_status=""
+      [[ -f "$sf" ]] && agent_status=$(cat "$sf" 2>/dev/null | tr -d '[:space:]')
+
+      if [[ "$agent_status" == "done" ]]; then
+        continue
+      fi
+
+      # Not done — check if session is dead with output (crashed after finishing)
+      local sid
+      sid=$(jq -r --arg aid "$aid" '.agents[] | select(.id == $aid) | .session_id // empty' "$wmf" 2>/dev/null)
+      local session_alive=false
+      tmux has-session -t "$sid" 2>/dev/null && session_alive=true
+
+      local output_file="${workspace}/workspace/${aid}.md"
+      local has_output=false
+      [[ -f "$output_file" && -s "$output_file" ]] && has_output=true
+
+      if [[ "$session_alive" == false && "$has_output" == true ]]; then
+        # Session dead but has output — start timeout countdown
+        local now; now=$(date +%s)
+        # Look up first_dead time for this aid in the plain string list
+        local fd_time=""
+        local fd_entry
+        for fd_entry in $first_dead_list; do
+          [[ "$fd_entry" == "${aid}:"* ]] && fd_time="${fd_entry#*:}" && break
+        done
+        if [[ -z "$fd_time" ]]; then
+          first_dead_list="${first_dead_list} ${aid}:${now}"
+          echo "[$(date '+%H:%M:%S')] ${aid}: session dead with output — starting ${dead_session_timeout}s timeout" \
+            >> "${workspace}/coordinator.log"
+        else
+          local elapsed=$(( now - fd_time ))
+          if [[ $elapsed -ge $dead_session_timeout ]]; then
+            echo "[$(date '+%H:%M:%S')] ${aid}: timeout reached — forcing status to done" \
+              >> "${workspace}/coordinator.log"
+            echo "done" > "$sf"
+            continue
+          fi
+        fi
+      fi
+
+      all_done=false
+    done
+  done
+
+  echo "[$(date '+%H:%M:%S')] all agents done — launching synthesizer" \
+    >> "${workspace}/coordinator.log"
+
+  # All agents done — spawn synthesizer
+  local synth_id="greg-$(_short_id)"
+  local synth_prompt
+  synth_prompt="You are the final synthesizer for a multi-agent task.
+
+Task ID: ${task_id}
+Workspace: ${workspace}
+
+All specialist agents and the director have completed their work. Your job:
+1. Read manifest.json at ${workspace}/manifest.json
+2. Read the director's synthesis notes at ${workspace}/workspace/director.md and ${workspace}/workspace/director-synthesis-notes.md
+3. Read all agent outputs in ${workspace}/workspace/
+4. Produce a single, well-structured final document at ${workspace}/final-output.md
+
+The final document should be coherent, non-repetitive, and directly address the original task goal. Structure it clearly with sections, cite which agent contributed each insight where relevant.
+
+Start immediately."
+
+  _spawn_agent "$synth_id" "synthesizer-${task_id}" "$workspace" "$synth_prompt"
+
+  # Update multi-task record
+  local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
+  local tmp; tmp=$(mktemp)
+  jq --arg sid "$synth_id" --arg ts "$(_now)" \
+    '. + {synthesizer_id: $sid, synthesizer_started: $ts, coordinator_status: "synthesizing"}' \
+    "$meta_file" > "$tmp" && mv "$tmp" "$meta_file"
+
+  echo "[$(date '+%H:%M:%S')] synthesizer started: ${synth_id}" \
+    >> "${workspace}/coordinator.log"
+
+  # Wait for synthesizer tmux session to exit (task complete)
+  while tmux has-session -t "$synth_id" 2>/dev/null; do
+    sleep 15
+  done
+
+  echo "[$(date '+%H:%M:%S')] synthesizer done — archiving all task sessions" \
+    >> "${workspace}/coordinator.log"
+
+  # Kill all agent sessions (read greg session IDs from manifest)
+  local wmf="${workspace}/manifest.json"
+  while IFS= read -r sid; do
+    [[ -z "$sid" || "$sid" == "null" ]] && continue
+    cmd_kill "$sid" >> "${workspace}/coordinator.log" 2>&1 || true
+  done < <(jq -r '.agents[].session_id // empty' "$wmf" 2>/dev/null)
+
+  # Kill synthesizer session
+  cmd_kill "$synth_id" >> "${workspace}/coordinator.log" 2>&1 || true
+
+  # Mark task as completed in meta file
+  local tmp2; tmp2=$(mktemp)
+  jq --arg ts "$(_now)" '. + {coordinator_status: "completed", completed: $ts}' \
+    "$meta_file" > "$tmp2" && mv "$tmp2" "$meta_file"
+
+  echo "[$(date '+%H:%M:%S')] task ${task_id} complete — all sessions archived" \
+    >> "${workspace}/coordinator.log"
 }
 
 _short_id() {
@@ -27,6 +215,18 @@ _short_id() {
 
 _now() {
   date '+%Y-%m-%d %H:%M:%S'
+}
+
+_session_activity() {
+  local sid="$1"
+  tmux has-session -t "$sid" 2>/dev/null || { echo "finished"; return; }
+  local pane
+  pane=$(tmux capture-pane -t "$sid" -p 2>/dev/null | tail -15)
+  if echo "$pane" | grep -qE 'Thinking|Symbioting|Crunching|⏺|↑ [0-9]+|↓ [0-9]+|· [0-9]+s'; then
+    echo "running"
+  else
+    echo "active"
+  fi
 }
 
 _current_session() {
@@ -110,12 +310,54 @@ cmd_spawn() {
 }
 
 cmd_list() {
-  echo "Sessions:"
+  # Collect session IDs from workspace manifests (meta file doesn't have them)
+  local task_session_ids=""
+  for meta in "${MULTI_TASKS_DIR}"/*.json; do
+    [[ -f "$meta" ]] || continue
+    local ws; ws=$(jq -r '.workspace' "$meta")
+    local wmf="${ws}/manifest.json"
+    [[ -f "$wmf" ]] || continue
+    while IFS= read -r sid; do
+      task_session_ids="${task_session_ids} ${sid}"
+    done < <(jq -r '.agents[].session_id // empty' "$wmf")
+  done
+
+  echo "Multi-agent tasks:"
+  local found_tasks=false
+  for meta in "${MULTI_TASKS_DIR}"/*.json; do
+    [[ -f "$meta" ]] || continue
+    found_tasks=true
+    local tid goal cstatus workspace
+    tid=$(jq -r '.task_id' "$meta")
+    goal=$(jq -r '.goal' "$meta")
+    cstatus=$(jq -r '.coordinator_status' "$meta")
+    workspace=$(jq -r '.workspace' "$meta")
+    local wmf="${workspace}/manifest.json"
+    printf "  %-22s [%-14s] %s\n" "$tid" "$cstatus" "${goal:0:55}"
+    while IFS=$'\t' read -r aid sid; do
+      local sf="${workspace}/status/${aid}.status"
+      local astatus="(not started)"
+      [[ -f "$sf" ]] && astatus=$(cat "$sf" | tr -d '[:space:]')
+      local tmux_flag=""
+      tmux has-session -t "$sid" 2>/dev/null && tmux_flag="▶" || tmux_flag="■"
+      printf "    ├ %-14s %s %-20s [%s]\n" "$aid" "$tmux_flag" "$sid" "$astatus"
+    done < <(jq -r '.agents[] | [.id, (.session_id // "?")] | @tsv' "$wmf" 2>/dev/null)
+  done
+  [[ "$found_tasks" == false ]] && echo "  (none)"
+
+  echo ""
+  echo "Standalone sessions:"
+  local found_sessions=false
   if jq -e 'length > 0' "${SESSIONS_FILE}" > /dev/null 2>&1; then
-    jq -r '.[] | "  \(.id)  \(.name)  \(.dir)  [\(.status)]  \(.started)"' "${SESSIONS_FILE}"
-  else
-    echo "  (none)"
+    while IFS=$'\t' read -r sid sname sstarted; do
+      [[ " ${task_session_ids} " == *" ${sid} "* ]] && continue
+      found_sessions=true
+      local astatus
+      astatus=$(_session_activity "$sid")
+      printf "  %-22s [%-8s] %-20s %s\n" "$sid" "$astatus" "$sname" "$sstarted"
+    done < <(jq -r '.[] | [.id, .name, .started] | @tsv' "${SESSIONS_FILE}")
   fi
+  [[ "$found_sessions" == false ]] && echo "  (none)"
 
   echo ""
   echo "Scheduled tasks:"
@@ -128,7 +370,7 @@ cmd_list() {
   echo ""
   echo "Recent history (last 3):"
   if jq -e 'length > 0' "${HISTORY_FILE}" > /dev/null 2>&1; then
-    jq -r 'reverse | .[0:3][] | "  \(.id)  \(.name)  \(.ended)"' "${HISTORY_FILE}"
+    jq -r 'reverse | .[0:3][] | "  \(.id)  [finished]  \(.name)  \(.ended)"' "${HISTORY_FILE}"
   else
     echo "  (none)"
   fi
@@ -387,6 +629,341 @@ cmd_cancel() {
   echo "cancelled ${id}"
 }
 
+cmd_task() {
+  local subcmd="${1:-help}"
+  shift || true
+
+  case "$subcmd" in
+    run)     _task_run     "$@" ;;
+    status)  _task_status  "$@" ;;
+    list)    _task_list ;;
+    recover) _task_recover "$@" ;;
+    revise)  _task_revise  "$@" ;;
+    *)
+      cat << 'EOF'
+greg task — multi-agent task runner
+
+  task run --goal "..." --agent "id:role description" [--agent ...]
+           Launch a multi-agent task.
+           Agent format: "<id>:<role description>"
+
+  task status <task-id>   Show current agent statuses for a task
+  task list               List all multi-agent tasks
+  task recover <task-id>  Force-complete crashed agents and restart coordinator
+  task revise <task-id> --agent <agent> --message "<feedback>"
+           Resume an agent from a completed task and send it feedback.
+           Agent can be any agent id (e.g. "synthesizer", "modelos", "director")
+EOF
+    ;;
+  esac
+}
+
+_task_run() {
+  local goal=""
+  local dir="${DEFAULT_DIR}"
+  local -a agent_specs=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --goal|-g)  goal="$2";              shift 2 ;;
+      --agent|-a) agent_specs+=("$2");    shift 2 ;;
+      --dir|-d)   dir="$2";              shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  [[ -z "$goal" ]] && { echo "Error: --goal is required" >&2; exit 1; }
+  [[ ${#agent_specs[@]} -lt 1 ]] && { echo "Error: at least one --agent is required" >&2; exit 1; }
+
+  dir="${dir/#\~/$HOME}"
+  [[ ! -d "$dir" ]] && { echo "Error: directory not found: $dir" >&2; exit 1; }
+
+  local task_id="mtask-$(_short_id)"
+  local workspace="${MULTI_TASKS_DIR}/${task_id}"
+  mkdir -p "${workspace}/workspace" "${workspace}/messages" "${workspace}/status"
+
+  # Build agent list: always prepend director
+  local -a all_agents=("director:Coordinate the team, monitor progress, facilitate cross-pollination between specialists, and ensure the final output is coherent")
+  for spec in "${agent_specs[@]}"; do
+    all_agents+=("$spec")
+  done
+
+  # Write manifest.json
+  local agents_json="[]"
+  for spec in "${all_agents[@]}"; do
+    local aid="${spec%%:*}"
+    local arole="${spec#*:}"
+    agents_json=$(echo "$agents_json" | jq \
+      --arg id "$aid" --arg role "$arole" \
+      '. += [{id: $id, role: $role}]')
+  done
+
+  jq -n \
+    --arg task_id  "$task_id" \
+    --arg goal     "$goal" \
+    --arg workspace "$workspace" \
+    --arg created  "$(_now)" \
+    --argjson agents "$agents_json" \
+    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents}' \
+    > "${workspace}/manifest.json"
+
+  # Save multi-task metadata
+  jq -n \
+    --arg task_id   "$task_id" \
+    --arg goal      "$goal" \
+    --arg workspace "$workspace" \
+    --arg created   "$(_now)" \
+    --argjson agents "$agents_json" \
+    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents, coordinator_status: "running"}' \
+    > "${MULTI_TASKS_DIR}/${task_id}.json"
+
+  echo "task     ${task_id}"
+  echo "goal     ${goal}"
+  echo "workspace ${workspace}"
+  echo ""
+
+  local -a spawned_ids=()
+
+  # Spawn each agent
+  for spec in "${all_agents[@]}"; do
+    local aid="${spec%%:*}"
+    local arole="${spec#*:}"
+    local session_id="greg-$(_short_id)"
+    spawned_ids+=("$aid")
+
+    # Resolve skill template
+    local skill_file
+    if [[ "$aid" == "director" ]]; then
+      skill_file="${SKILLS_DIR}/greg-director.md"
+    else
+      skill_file="${SKILLS_DIR}/greg-teammate.md"
+    fi
+
+    local prompt
+    prompt=$(_resolve_skill "$skill_file" "$task_id" "$aid" "$arole" "$goal" "$workspace")
+
+    # Map agent id → session id in manifest
+    local tmp; tmp=$(mktemp)
+    jq --arg aid "$aid" --arg sid "$session_id" \
+      '.agents = [.agents[] | if .id == $aid then . + {session_id: $sid} else . end]' \
+      "${workspace}/manifest.json" > "$tmp" && mv "$tmp" "${workspace}/manifest.json"
+
+    _spawn_agent "$session_id" "${aid}-${task_id}" "$workspace" "$prompt"
+    echo "spawned  ${aid} → ${session_id}"
+  done
+
+  echo ""
+
+  # Start background coordinator — nohup so it survives terminal closure
+  nohup "${GREG_BIN}" _coordinator "${task_id}" "${workspace}" "${spawned_ids[@]}" \
+    >> "${workspace}/coordinator.log" 2>&1 &
+  local coord_pid=$!
+  disown "$coord_pid"
+  echo "$coord_pid" > "${workspace}/coordinator.pid"
+
+  echo "coordinator started (pid ${coord_pid})"
+  echo "monitor  greg task status ${task_id}"
+}
+
+_task_status() {
+  local task_id="${1:-}"
+  [[ -z "$task_id" ]] && { echo "Usage: greg task status <task-id>" >&2; exit 1; }
+
+  local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
+  [[ ! -f "$meta_file" ]] && { echo "Task not found: $task_id" >&2; exit 1; }
+
+  local goal workspace coordinator_status
+  goal=$(jq -r '.goal' "$meta_file")
+  workspace=$(jq -r '.workspace' "$meta_file")
+  coordinator_status=$(jq -r '.coordinator_status' "$meta_file")
+
+  # Check if coordinator is alive
+  local coord_alive="stopped"
+  local pid_file="${workspace}/coordinator.pid"
+  if [[ -f "$pid_file" ]]; then
+    local cpid; cpid=$(cat "$pid_file")
+    kill -0 "$cpid" 2>/dev/null && coord_alive="running (pid ${cpid})"
+  fi
+
+  echo "task        ${task_id}"
+  echo "goal        ${goal}"
+  echo "status      ${coordinator_status}"
+  echo "coordinator ${coord_alive}"
+  echo ""
+  echo "Agents:"
+
+  while IFS=$'\t' read -r aid arole sid; do
+    local status_file="${workspace}/status/${aid}.status"
+    local agent_status="(not started)"
+    [[ -f "$status_file" ]] && agent_status=$(cat "$status_file" | tr -d '[:space:]')
+    local tmux_status=""
+    tmux has-session -t "$sid" 2>/dev/null && tmux_status=" (tmux: running)" || tmux_status=" (tmux: stopped)"
+    printf "  %-16s %-12s %-20s %s\n" "$aid" "[$agent_status]" "${sid}${tmux_status}" "$arole"
+  done < <(jq -r '.agents[] | [.id, .role, (.session_id // "?")] | @tsv' "$meta_file")
+
+  # Show final output if exists
+  local final="${workspace}/final-output.md"
+  if [[ -f "$final" ]]; then
+    echo ""
+    echo "Final output: ${final}"
+  fi
+}
+
+_task_recover() {
+  local task_id="${1:-}"
+  [[ -z "$task_id" ]] && { echo "Usage: greg task recover <task-id>" >&2; exit 1; }
+
+  local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
+  [[ ! -f "$meta_file" ]] && { echo "Task not found: $task_id" >&2; exit 1; }
+
+  local workspace
+  workspace=$(jq -r '.workspace' "$meta_file")
+  local wmf="${workspace}/manifest.json"
+
+  echo "Recovering task ${task_id}..."
+
+  # Force-complete agents whose session is dead but have output
+  local agent_ids=()
+  while IFS= read -r aid; do
+    agent_ids+=("$aid")
+    local sf="${workspace}/status/${aid}.status"
+    local current_status=""
+    [[ -f "$sf" ]] && current_status=$(cat "$sf" | tr -d '[:space:]')
+
+    if [[ "$current_status" == "done" ]]; then
+      echo "  ${aid}: already done — skipping"
+      continue
+    fi
+
+    local output_file="${workspace}/workspace/${aid}.md"
+    local sid
+    sid=$(jq -r --arg aid "$aid" '.agents[] | select(.id == $aid) | .session_id // empty' "$wmf" 2>/dev/null)
+    local session_alive=false
+    tmux has-session -t "$sid" 2>/dev/null && session_alive=true
+
+    if [[ "$session_alive" == false && -f "$output_file" && -s "$output_file" ]]; then
+      echo "done" > "$sf"
+      echo "  ${aid}: session dead with output — forced done"
+    elif [[ "$session_alive" == true ]]; then
+      echo "  ${aid}: still running — leaving as-is"
+    else
+      echo "  ${aid}: no output and no session — marking done (no data)"
+      echo "done" > "$sf"
+    fi
+  done < <(jq -r '.agents[].id' "$wmf")
+
+  # Kill any stale coordinator
+  local pid_file="${workspace}/coordinator.pid"
+  if [[ -f "$pid_file" ]]; then
+    local old_pid; old_pid=$(cat "$pid_file")
+    kill "$old_pid" 2>/dev/null && echo "  killed stale coordinator (pid ${old_pid})" || true
+    rm -f "$pid_file"
+  fi
+
+  # Update meta status back to running so coordinator can finish
+  local tmp; tmp=$(mktemp)
+  jq '. + {coordinator_status: "running"}' "$meta_file" > "$tmp" && mv "$tmp" "$meta_file"
+
+  # Restart coordinator
+  nohup "${GREG_BIN}" _coordinator "${task_id}" "${workspace}" "${agent_ids[@]}" \
+    >> "${workspace}/coordinator.log" 2>&1 &
+  local coord_pid=$!
+  disown "$coord_pid"
+  echo "$coord_pid" > "$pid_file"
+
+  echo "coordinator restarted (pid ${coord_pid})"
+  echo "monitor  greg task status ${task_id}"
+}
+
+_task_revise() {
+  local task_id=""
+  local agent=""
+  local message=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)   agent="$2";   shift 2 ;;
+      --message) message="$2"; shift 2 ;;
+      *)         task_id="$1"; shift   ;;
+    esac
+  done
+
+  [[ -z "$task_id" || -z "$agent" || -z "$message" ]] && {
+    echo "Usage: greg task revise <task-id> --agent <greg-session-id> --message \"<feedback>\"" >&2
+    exit 1
+  }
+
+  local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
+  [[ ! -f "$meta_file" ]] && { echo "Task not found: $task_id" >&2; exit 1; }
+
+  # Look up claude_session_id from history using greg session ID directly
+  local entry
+  entry=$(jq -r "map(select(.id == \"${agent}\")) | .[0]" "${HISTORY_FILE}")
+  if [[ "$entry" == "null" || -z "$entry" ]]; then
+    echo "Session not found in history: ${agent}" >&2
+    echo "Make sure the agent session was killed (greg kill) before revising." >&2
+    exit 1
+  fi
+
+  local claude_sid dir name
+  claude_sid=$(echo "$entry" | jq -r '.claude_session_id // empty')
+  dir=$(echo "$entry" | jq -r '.dir')
+  name=$(echo "$entry" | jq -r '.name')
+
+  [[ -z "$claude_sid" ]] && {
+    echo "No claude_session_id stored for ${agent} — cannot resume" >&2; exit 1
+  }
+
+  # Resume session
+  local new_id="greg-$(_short_id)"
+  mkdir -p "${MAILBOX_DIR}/${new_id}"
+  touch "${MAILBOX_DIR}/${new_id}/inbox.md"
+
+  local new_entry
+  new_entry=$(jq -n \
+    --arg id           "$new_id" \
+    --arg name         "$name" \
+    --arg dir          "$dir" \
+    --arg started      "$(_now)" \
+    --arg resumed_from "$agent" \
+    '{id:$id, name:$name, dir:$dir, started:$started, status:"active", resumed_from:$resumed_from}')
+  local tmp; tmp=$(mktemp)
+  jq ". += [$new_entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+
+  tmux new-session -d -s "${new_id}" \
+    -e "GREG_SESSION_ID=${new_id}" \
+    "cd '${dir}' && claude ${CLAUDE_FLAGS} --resume '${claude_sid}'"
+
+  # Wait for claude to start, then send the message
+  sleep 10
+  tmux send-keys -t "$new_id" "$message" Enter 2>/dev/null || {
+    echo "Warning: could not send message to session — attach manually" >&2
+  }
+  # Extra Enter in case Claude finished loading after the first keystroke
+  sleep 1
+  tmux send-keys -t "$new_id" "" Enter 2>/dev/null
+
+  echo "resumed  ${new_id} (${name})"
+  echo "agent    ${agent}"
+  echo "message  sent"
+  echo "attach   greg attach ${new_id}"
+}
+
+_task_list() {
+  local found=false
+  for f in "${MULTI_TASKS_DIR}"/*.json; do
+    [[ -f "$f" ]] || continue
+    found=true
+    local task_id goal created coordinator_status
+    task_id=$(jq -r '.task_id' "$f")
+    goal=$(jq -r '.goal' "$f")
+    created=$(jq -r '.created' "$f")
+    coordinator_status=$(jq -r '.coordinator_status' "$f")
+    printf "  %-20s [%-14s] %s  %s\n" "$task_id" "$coordinator_status" "$created" "${goal:0:60}"
+  done
+  [[ "$found" == false ]] && echo "  (no multi-agent tasks)"
+}
+
 cmd_help() {
   cat << 'EOF'
 greg — multi-agent Claude Code manager
@@ -403,6 +980,12 @@ greg — multi-agent Claude Code manager
   inbox    [<session-id>]                                   read inbox
   kill     <session-id>                                     stop & archive session
   cancel   <task-id>                                        cancel scheduled task
+
+  task run --goal "..." --agent "id:role" [--agent ...]   launch multi-agent task
+  task status <task-id>                                    show agent statuses
+  task list                                                list all multi-agent tasks
+  task recover <task-id>                                   force-complete crashed agents
+  task revise <task-id> --agent <agent> --message "<msg>" resume agent with feedback
 
 Default dir: $GREG_VAULT (or $HOME if not set)
 EOF
@@ -424,6 +1007,8 @@ case "${1:-help}" in
   inbox)    shift; cmd_inbox    "$@" ;;
   kill)     shift; cmd_kill     "$@" ;;
   cancel)   shift; cmd_cancel   "$@" ;;
+  task)     shift; cmd_task     "$@" ;;
+  _coordinator) shift; _coordinator_loop "$@" ;;
   help|--help|-h) cmd_help ;;
   *) echo "Unknown command: $1. Run 'greg help'" >&2; exit 1 ;;
 esac
