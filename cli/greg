@@ -79,6 +79,18 @@ _spawn_agent() {
   tmux new-session -d -s "${session_id}" \
     -e "GREG_SESSION_ID=${session_id}" \
     "cd '${workspace}' && { printf '\\n'; cat '${prompt_file}'; } | claude ${CLAUDE_FLAGS}; rm -f '${prompt_file}'"
+
+  # Capture claude_session_id shortly after spawn and persist it
+  (
+    sleep 15
+    local claude_sid
+    claude_sid=$(_claude_session_id_for_dir "$workspace")
+    if [[ -n "$claude_sid" ]]; then
+      local tmp; tmp=$(mktemp)
+      jq "map(if .id == \"${session_id}\" then . + {claude_session_id: \"${claude_sid}\"} else . end)" \
+        "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
+    fi
+  ) &
 }
 
 _coordinator_loop() {
