@@ -134,15 +134,31 @@ The agent resumes with full Claude conversation context and receives the message
 
 ### Skills
 
-Agent behavior is defined by skill templates in `skills/`:
+There are two kinds of skills in `skills/`:
+
+**Agent prompt templates** — injected by the CLI into each spawned agent:
 
 | File | Purpose |
 |------|---------|
-| `greg-mailbox.md` | Shared workspace/messaging protocol — injected into every agent prompt |
-| `greg-director.md` | Director prompt: coordinate team, cross-pollinate, trigger synthesis |
-| `greg-teammate.md` | Specialist prompt: progressive writing, proactive reading, status protocol |
+| `greg-mailbox.md` | Shared workspace/messaging protocol — injected into every agent |
+| `greg-director.md` | Director: coordinate team, cross-pollinate, trigger synthesis |
+| `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
 
 Templates support `{{TASK_ID}}`, `{{AGENT_ID}}`, `{{AGENT_ROLE}}`, `{{TASK_GOAL}}`, `{{WORKSPACE}}` variables and `{{> greg-mailbox}}` partial includes.
+
+**Claude Code skills** (`skills/claude-skills/`) — invoked by the orchestrating agent via `/skill-name`:
+
+| Skill | Purpose |
+|-------|---------|
+| `greg-task` | Design and launch a multi-agent task interactively |
+| `greg-revise` | Close a revision session cleanly — marks task completed and runs `greg kill` |
+
+Install by copying to your Claude Code skills directory:
+
+```bash
+cp -r skills/claude-skills/greg-task ~/.claude/skills/
+cp -r skills/claude-skills/greg-revise ~/.claude/skills/
+```
 
 ### UI
 
