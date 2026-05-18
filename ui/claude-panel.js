@@ -17,18 +17,17 @@ const MAILBOX_DIR  = path.join(GREG_HOME, 'mailbox');
 // ── Greg session helpers ──────────────────────────────────────────────────────
 const crypto = require('crypto');
 
-function gregSpawn(name) {
+function gregSpawn() {
   const id      = `greg-${crypto.randomBytes(4).toString('hex')}`;
-  const label   = name || id;
   const started = new Date().toISOString().replace('T', ' ').slice(0, 19);
   try {
     fs.mkdirSync(path.join(MAILBOX_DIR, id), { recursive: true });
     fs.writeFileSync(path.join(MAILBOX_DIR, id, 'inbox.md'), '');
     const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8') || '[]');
-    sessions.push({ id, name: label, dir: VAULT, started, status: 'active' });
+    sessions.push({ id, dir: VAULT, started, status: 'active' });
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
   } catch {}
-  return { id, name: label };
+  return { id };
 }
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
@@ -36,7 +35,7 @@ const cliArgs         = process.argv.slice(2);
 const argClaudeSession = cliArgs[cliArgs.indexOf('--claude-session') + 1] || null;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
-const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'claude' });
+const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'claude', mouse: true });
 
 const statusBar = blessed.box({
   parent: screen, top: 0, left: 0,
@@ -50,17 +49,35 @@ const tabBar = blessed.box({
   tags: true, style: { bg: '#0d0d0d' },
 });
 
+const MAX_INPUT_LINES = 6;
+
 const output = blessed.log({
   parent: screen, top: 2, left: 0,
-  width: '100%', height: '100%-5',
-  tags: true, scrollable: true, alwaysScroll: true,
+  width: '100%', bottom: 5,
+  tags: true, scrollable: true, alwaysScroll: false,
+  mouse: true,
   padding: { left: 1, right: 1 },
+  scrollbar: { ch: '▐', style: { fg: '#333' } },
+});
+
+output.on('wheelup', () => {
+  tab().scrollLock = true;
+  output.scroll(-3);
+  screen.render();
+});
+
+output.on('wheeldown', () => {
+  output.scroll(3);
+  if (output.getScrollPerc() >= 99) tab().scrollLock = false;
+  screen.render();
 });
 
 const inputLine = blessed.box({
   parent: screen, bottom: 2, left: 0,
-  width: '100%', height: 1,
-  tags: true, style: { bg: '#1a1a1a' },
+  width: '100%', height: 3,
+  tags: true, wrap: true,
+  padding: { left: 1, right: 1 },
+  style: { bg: '#1a1a1a' },
 });
 
 blessed.line({
@@ -73,7 +90,7 @@ blessed.box({
   parent: screen, bottom: 0, left: 0,
   width: '100%', height: 1,
   tags: true,
-  content: '  {gray-fg}Enter enviar  Ctrl+←/→ tabs  Ctrl+T nueva  Ctrl+W cerrar  Ctrl+C cancelar  Ctrl+Q salir{/}',
+  content: '  {gray-fg}Enter enviar  Alt+Enter nueva línea  PgUp/PgDn scroll  Ctrl+Shift+←/→ tabs  Ctrl+T nueva  Ctrl+W cerrar  Ctrl+Q salir{/}',
   style: { bg: '#111' },
 });
 
@@ -83,7 +100,9 @@ function createTab(name, claudeSession) {
     name,
     claudeSession: claudeSession || null,
     content: '',
-    inputBuf: '',   // input buffer por tab
+    lines: [],
+    scrollLock: false,
+    inputBuf: '',
     running: false,
     proc: null,
     cost: 0,
@@ -91,7 +110,29 @@ function createTab(name, claudeSession) {
   };
 }
 
-const tabs = [createTab('main', argClaudeSession)];
+// Cargar sesión activa previa de Greg, o crear una nueva registrada
+function buildInitialTab() {
+  if (argClaudeSession) {
+    const t = createTab('manual', argClaudeSession);
+    return t;
+  }
+  try {
+    const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+    if (sessions.length > 0) {
+      const active = sessions.filter(s => s.status === 'active').pop() || sessions[sessions.length - 1];
+      const t = createTab(active.id.replace(/^greg-/, ''), active.claude_session_id || null);
+      t.gregSessionId = active.id;
+      return t;
+    }
+  } catch {}
+  // Solo crear nueva si no existe ninguna sesión
+  const { id } = gregSpawn();
+  const t = createTab(id.replace(/^greg-/, ''), null);
+  t.gregSessionId = id;
+  return t;
+}
+
+const tabs = [buildInitialTab()];
 let tabIdx = 0;
 
 function tab() { return tabs[tabIdx]; }
@@ -116,8 +157,9 @@ function switchTab(newIdx) {
   }
   tabIdx   = newIdx;
   inputBuf = tab().inputBuf;
-  // Restaurar contenido
   output.setContent(tab().content);
+  for (const line of tab().lines) output.log(line);
+  tab().lines = [];
   output.setScrollPerc(100);
   renderTabBar();
   renderStatus();
@@ -147,7 +189,7 @@ function newTab(name, claudeSession, gregSessionId) {
   tabs.push(t);
   switchTab(tabs.length - 1);
   if (claudeSession) {
-    tabLog(`{gray-fg}sesión: ${claudeSession.slice(0, 8)}… (contexto preservado){/}`);
+    tabLog(`{gray-fg}retomando ${name} (contexto preservado){/}`);
     tabLog('');
   } else {
     tabLog('{gray-fg}nueva sesión de claude{/}');
@@ -162,7 +204,7 @@ let globalCost = 0;
 
 function renderStatus() {
   const t   = tab();
-  const sid = t.claudeSession ? t.claudeSession.slice(0, 8) : '—';
+  const sid = t.gregSessionId ? t.gregSessionId.replace(/^greg-/, '') : '—';
   const cost = globalCost > 0 ? ` {gray-fg}$${globalCost.toFixed(3)}{/}` : '';
   const ctx  = t.contextPct !== null ? ` {gray-fg}ctx:${t.contextPct}%{/}` : '';
 
@@ -195,15 +237,30 @@ function stopSpinner() {
 // ── Output helpers ────────────────────────────────────────────────────────────
 let currentAction = '';
 
-function tabLog(line) {
-  output.log(line);
+function tabLog(line, t) {
+  if (!t || t === tab()) {
+    output.log(line);
+    if (!tab().scrollLock) output.setScrollPerc(100);
+  } else {
+    t.lines.push(line);
+  }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 let inputBuf = '';  // sincronizado con tab().inputBuf
 
 function renderInput() {
-  inputLine.setContent(`{gray-fg}>{/} ${escTags(inputBuf)}`);
+  const lines = inputBuf.split('\n');
+  const visibleLines = Math.min(MAX_INPUT_LINES, lines.length);
+  const inputHeight = visibleLines + 2; // +2 margen visual
+  inputLine.height = inputHeight;
+  inputLine.bottom = 2;
+  output.bottom = inputHeight + 2; // +2 = separador + barra de ayuda
+
+  const content = lines
+    .map((l, i) => (i === 0 ? `{gray-fg}>{/} ${escTags(l)}` : `  ${escTags(l)}`))
+    .join('\n');
+  inputLine.setContent(content);
   screen.render();
 }
 
@@ -246,7 +303,7 @@ function send(text) {
 
   t.proc.stderr.on('data', chunk => {
     const s = chunk.toString().trim();
-    if (s) { tabLog(`{red-fg}${escTags(s)}{/}`); screen.render(); }
+    if (s) { tabLog(`{red-fg}${escTags(s)}{/}`, t); screen.render(); }
   });
 
   t.proc.on('close', () => {
@@ -255,7 +312,7 @@ function send(text) {
     currentAction = '';
     const anyRunning = tabs.some(tb => tb.running);
     if (!anyRunning) stopSpinner();
-    tabLog('');
+    tabLog('', t);
     renderStatus();
     renderTabBar();
   });
@@ -292,12 +349,12 @@ function handleEvent(raw, t) {
       for (const b of blocks) {
         if (b.type === 'text' && b.text) {
           currentAction = '';
-          b.text.split('\n').forEach(l => tabLog(escTags(l)));
+          b.text.split('\n').forEach(l => tabLog(escTags(l), t));
         }
         if (b.type === 'tool_use') {
           const label = formatToolLabel(b.name, b.input);
           currentAction = `${b.name}…`;
-          tabLog(`{yellow-fg}⚙ ${b.name}{/} {gray-fg}${escTags(label)}{/}`);
+          tabLog(`{yellow-fg}⚙ ${b.name}{/} {gray-fg}${escTags(label)}{/}`, t);
         }
       }
       screen.render();
@@ -311,8 +368,8 @@ function handleEvent(raw, t) {
           const txt = extractResult(b);
           if (txt) {
             const lines = txt.split('\n').slice(0, 6);
-            lines.forEach(l => tabLog(`  {gray-fg}${escTags(l)}{/}`));
-            if (txt.split('\n').length > 6) tabLog(`  {gray-fg}…(${txt.split('\n').length} líneas){/}`);
+            lines.forEach(l => tabLog(`  {gray-fg}${escTags(l)}{/}`, t));
+            if (txt.split('\n').length > 6) tabLog(`  {gray-fg}…(${txt.split('\n').length} líneas){/}`, t);
           }
         }
       }
@@ -327,9 +384,23 @@ function handleEvent(raw, t) {
           const used = (m.inputTokens || 0) + (m.cacheReadInputTokens || 0) + (m.cacheCreationInputTokens || 0);
           t.contextPct = Math.round(used / m.contextWindow * 100);
         }
+        // Acumular output tokens y costo en la sesión de Greg
+        if (t.gregSessionId) {
+          try {
+            const outputTokens = Object.values(ev.modelUsage)
+              .reduce((sum, m) => sum + (m.outputTokens || 0), 0);
+            const sdata = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+            const s = sdata.find(s => s.id === t.gregSessionId);
+            if (s) {
+              s.output_tokens = (s.output_tokens || 0) + outputTokens;
+              s.cost_usd = (s.cost_usd || 0) + (ev.total_cost_usd || 0);
+              fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sdata, null, 2));
+            }
+          } catch {}
+        }
       }
       if (ev.subtype === 'error') {
-        tabLog(`{red-fg}Error: ${escTags(String(ev.error || ''))}{/}`);
+        tabLog(`{red-fg}Error: ${escTags(String(ev.error || ''))}{/}`, t);
         screen.render();
       }
       break;
@@ -361,15 +432,30 @@ screen.on('keypress', (ch, key) => {
     return;
   }
 
-  // Navegar tabs
-  if (key.full === 'C-right') { switchTab(tabIdx + 1); return; }
-  if (key.full === 'C-left')  { switchTab(tabIdx - 1); return; }
+  // Scroll del output
+  if (key.name === 'pageup') {
+    tab().scrollLock = true;
+    output.scroll(-Math.floor(output.height / 2));
+    screen.render();
+    return;
+  }
+  if (key.name === 'pagedown') {
+    output.scroll(Math.floor(output.height / 2));
+    if (output.getScrollPerc() >= 99) tab().scrollLock = false;
+    screen.render();
+    return;
+  }
+
+  // Navegar tabs — Ctrl+Shift+Flechas para no colisionar con Mission Control de macOS
+  const isCtrlShiftRight = key.full === 'C-S-right' || (key.ctrl && key.shift && key.name === 'right') || key.sequence === '\x1b[1;6C';
+  const isCtrlShiftLeft  = key.full === 'C-S-left'  || (key.ctrl && key.shift && key.name === 'left')  || key.sequence === '\x1b[1;6D';
+  if (isCtrlShiftRight) { switchTab(tabIdx + 1); return; }
+  if (isCtrlShiftLeft)  { switchTab(tabIdx - 1); return; }
 
   // Nueva tab (registra en greg)
   if (key.full === 'C-t') {
-    const count = tabs.length + 1;
-    const { id, name } = gregSpawn(`sesión-${count}`);
-    newTab(name, null, id);
+    const { id } = gregSpawn();
+    newTab(id.replace(/^greg-/, ''), null, id);
     return;
   }
 
@@ -377,6 +463,14 @@ screen.on('keypress', (ch, key) => {
   if (key.full === 'C-w') { closeTab(); return; }
 
   if (tab().running) return;
+
+  // Alt+Enter = nueva línea en el input
+  if ((key.full === 'M-return' || key.full === 'M-enter' || (key.meta && (key.name === 'return' || key.name === 'enter')))) {
+    inputBuf += '\n';
+    syncInput();
+    renderInput();
+    return;
+  }
 
   if (key.name === 'enter' || key.name === 'return') {
     send(inputBuf);
@@ -412,16 +506,12 @@ function extractResult(b) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-// Cargar sesión guardada para el tab main
 const t = tab();
-if (!t.claudeSession) {
-  try { t.claudeSession = fs.readFileSync(SESSION_FILE, 'utf8').trim(); } catch {}
-}
 
 renderStatus();
 renderTabBar();
 tabLog('{gray-fg}claude panel — escribe tu mensaje y presiona Enter{/}');
-if (t.claudeSession) tabLog(`{gray-fg}sesión: ${t.claudeSession.slice(0, 8)}… (contexto preservado){/}`);
+if (t.claudeSession) tabLog(`{gray-fg}sesión previa cargada: ${t.claudeSession.slice(0, 8)}…{/}`);
 tabLog('');
 renderInput();
 screen.render();

@@ -14,9 +14,15 @@ fi
 # Crear sesión nueva
 tmux new-session -d -s "$SESSION"
 
-# Layout 3 columnas: historial(20%) | claude(55%) | terminal(25%)
-tmux split-window -h -t "$SESSION:0.0" -p 80
-tmux split-window -h -t "$SESSION:0.1" -p 31
+# Layout 3 columnas: historial(15%) | claude(70%) | terminal(15%)
+COLS=$(tput cols)
+HIST_COLS=$((COLS * 15 / 100))
+CLAUDE_COLS=$((COLS * 70 / 100))
+
+tmux split-window -h -t "$SESSION:0.0"
+tmux split-window -h -t "$SESSION:0.1"
+tmux resize-pane -t "$SESSION:0.0" -x "$HIST_COLS"
+tmux resize-pane -t "$SESSION:0.1" -x "$CLAUDE_COLS"
 
 # Títulos y estilo
 tmux select-pane -t "$SESSION:0.0" -T "sessions"

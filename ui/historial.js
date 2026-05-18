@@ -26,7 +26,7 @@ const header = blessed.box({
 
 const list = blessed.list({
   parent: screen,
-  top: 1, left: 0, width: '100%', height: '100%-3',
+  top: 1, left: 0, width: '100%', height: '100%-2',
   keys: true, vi: true, tags: true,
   scrollable: true, alwaysScroll: true,
   style: {
@@ -34,6 +34,8 @@ const list = blessed.list({
     item: { fg: 'white' },
   },
 });
+
+const metricsBar = { setContent: () => {} }; // eliminado, métricas en la lista
 
 blessed.box({
   parent: screen,
@@ -55,22 +57,18 @@ function write(file, data) {
 }
 
 // Crea una sesión greg sin tmux (para el UI panel)
-function gregSpawnUI(name) {
-  const shortId  = crypto.randomBytes(4).toString('hex');
-  const id       = `greg-${shortId}`;
-  const label    = name || id;
-  const started  = new Date().toISOString().replace('T', ' ').slice(0, 19);
+function gregSpawnUI() {
+  const id      = `greg-${crypto.randomBytes(4).toString('hex')}`;
+  const started = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-  // Mailbox
   fs.mkdirSync(path.join(MAILBOX_DIR, id), { recursive: true });
   fs.writeFileSync(path.join(MAILBOX_DIR, id, 'inbox.md'), '');
 
-  // Registrar en sessions.json
   const sessions = read(SESSIONS_FILE);
-  sessions.push({ id, name: label, dir: VAULT, started, status: 'active' });
+  sessions.push({ id, dir: VAULT, started, status: 'active' });
   write(SESSIONS_FILE, sessions);
 
-  return { id, name: label };
+  return { id };
 }
 
 // Guarda claude_session_id en la sesión greg activa
@@ -123,14 +121,36 @@ function refresh() {
     itemData.push(null);
   } else {
     for (const s of sessions) {
-      const alive = tmuxAlive(s.id);
-      const dot   = alive ? '{green-fg}●{/}' : '{yellow-fg}●{/}';
-      const name  = (s.name || s.id).replace(/^greg-/, '').slice(0, 14);
-      const time  = (s.started || '').slice(5, 16);
-      items.push(`  ${dot} ${name} {gray-fg}${time}{/}`);
+      const alive   = tmuxAlive(s.id);
+      const dot     = alive ? '{green-fg}●{/}' : '{yellow-fg}●{/}';
+      const shortId = s.id.replace(/^greg-/, '');
+      const time    = (s.started || '').slice(5, 16);
+      items.push(`  ${dot} ${shortId} {gray-fg}${time}{/}`);
       itemData.push({ type: 'active', s, alive });
     }
   }
+
+  // ── Métricas ──────────────────────────────────────────────────────────────
+  const allSessions = [...sessions, ...history];
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const monthSessions = allSessions.filter(s => (s.started || '').startsWith(thisMonth));
+  const totalSessions = allSessions.length;
+  const monthOutputTokens = monthSessions.reduce((sum, s) => sum + (s.output_tokens || 0), 0);
+  const monthCost = monthSessions.reduce((sum, s) => sum + (s.cost_usd || 0), 0);
+  const fmtTokens = monthOutputTokens >= 1000
+    ? `${(monthOutputTokens / 1000).toFixed(1)}k`
+    : String(monthOutputTokens);
+
+  items.push('');
+  itemData.push(null);
+  items.push(' {bold}MÉTRICAS{/}');
+  itemData.push(null);
+  items.push(`  {gray-fg}sesiones totales{/}   {white-fg}${totalSessions}{/}`);
+  itemData.push(null);
+  items.push(`  {gray-fg}output tokens/mes{/}  {white-fg}${fmtTokens}{/}`);
+  itemData.push(null);
+  items.push(`  {gray-fg}costo/mes{/}          {white-fg}$${monthCost.toFixed(3)}{/}`);
+  itemData.push(null);
 
   // ── Historial ─────────────────────────────────────────────────────────────
   items.push('');
@@ -143,14 +163,17 @@ function refresh() {
     itemData.push(null);
   } else {
     for (const h of history.slice(0, 30)) {
-      const name    = (h.name || h.id).replace(/^greg-/, '').slice(0, 14);
+      const shortId = h.id.replace(/^greg-/, '');
       const started = (h.started || '').slice(5, 16);
       const ended   = (h.ended   || '').slice(11, 16);
       const resume  = h.claude_session_id ? '{gray-fg}↩{/}' : ' ';
-      items.push(`  {gray-fg}○{/} ${resume} ${name} {gray-fg}${started}→${ended}{/}`);
+      items.push(`  {gray-fg}○{/} ${resume} ${shortId} {gray-fg}${started}→${ended}{/}`);
       itemData.push({ type: 'history', h });
     }
   }
+
+  // ── Métricas ──────────────────────────────────────────────────────────────
+  metricsBar.setContent('');
 
   header.setContent(
     `  {bold}{cyan-fg}greg{/}{/} {gray-fg}${sessions.length} activa${sessions.length !== 1 ? 's' : ''}{/}`
@@ -186,12 +209,10 @@ list.on('select', (_item, idx) => {
   if (!d) return;
 
   if (d.type === 'active') {
-    const name = (d.s.name || d.s.id).replace(/^greg-/, '').slice(0, 14);
-    openInCenter(name, d.s.claude_session_id || null, d.s.id);
+    openInCenter(d.s.id.replace(/^greg-/, ''), d.s.claude_session_id || null, d.s.id);
 
   } else if (d.type === 'history') {
-    const name = (d.h.name || 'session').replace(/^greg-/, '').slice(0, 14);
-    openInCenter(name, d.h.claude_session_id || null, null);
+    openInCenter(d.h.id.replace(/^greg-/, ''), d.h.claude_session_id || null, d.h.id);
   }
 });
 
@@ -206,9 +227,8 @@ screen.key(['x'], () => {
 
 // n → nueva sesión greg + abre tab en el centro
 screen.key(['n'], () => {
-  const count = read(SESSIONS_FILE).length + 1;
-  const { id, name } = gregSpawnUI(`sesión-${count}`);
-  openInCenter(name, null, id);
+  const { id } = gregSpawnUI();
+  openInCenter(id.replace(/^greg-/, ''), null, id);
 });
 
 screen.key(['C-q'], () => process.exit(0));
