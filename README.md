@@ -119,7 +119,18 @@ greg task revise mtask-xxxxxxxx \
 
 **Resilience:** If an agent's session crashes before writing `done`, the coordinator detects this and auto-recovers after 120 seconds. Use `greg task recover` to force immediate recovery.
 
-**Revising results:** Once a task is complete, use `greg task revise` to resume any agent with follow-up feedback. The agent resumes its Claude session with full conversation context. Find the agent's greg session ID in `greg task status <task-id>` or `greg list`.
+**Revising results:** Once a task is complete, find the agent's session ID with `greg task status <task-id>`, then resume it:
+
+```bash
+greg task status mtask-xxxxxxxx
+# shows each agent's greg session ID (e.g. greg-a1b2c3)
+
+greg task revise mtask-xxxxxxxx \
+  --agent greg-a1b2c3 \
+  --message "Go deeper on the Gemini benchmarks section."
+```
+
+The agent resumes with full Claude conversation context and receives the message automatically. When done, it invokes `/greg-revise` inside its session to close and archive itself cleanly.
 
 ### Skills
 
