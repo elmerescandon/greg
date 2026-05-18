@@ -8,15 +8,19 @@ Multi-agent Claude Code manager with a terminal UI.
 **greg UI** — a 3-pane terminal workspace: session history | claude panel | shell.
 
 ```
-┌─────────────────┬──────────────────────────┬──────────────┐
-│   sessions      │      claude-code          │   terminal   │
-│                 │                           │              │
-│  ACTIVAS        │  ● claude  abc12345       │              │
-│  ● my-task      │  main │ task-1            │              │
-│                 │                           │              │
-│  HISTORIAL      │  > your message here      │              │
-│  ○ old-task     │                           │              │
-└─────────────────┴──────────────────────────┴──────────────┘
+┌──────────────┬──────────────────────────────────────┬──────────────┐
+│   sessions   │           claude-code                │   terminal   │
+│              │                                      │              │
+│  ACTIVAS     │  ● claude  abc12345                  │              │
+│  ● abc12345  │  main │ task-1                       │              │
+│              │                                      │              │
+│  MÉTRICAS    │  > your message here                 │              │
+│  tokens 12k  │                                      │              │
+│  costo $0.04 │                                      │              │
+│              │                                      │              │
+│  HISTORIAL   │                                      │              │
+│  ○ old-task  │                                      │              │
+└──────────────┴──────────────────────────────────────┴──────────────┘
 ```
 
 ## Requirements
@@ -42,7 +46,7 @@ This is the directory Claude Code will work in by default.
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-username/greg
+git clone https://github.com/elmerescandon/greg
 cd greg
 
 # Add CLI to PATH
@@ -91,16 +95,27 @@ greg schedule --prompt "run tests" --at "2026-01-15 09:00"
 greg-ui
 ```
 
+#### Claude panel
+
 | Key | Action |
 |-----|--------|
-| `Ctrl+Cmd+←/→` | Navigate panes |
-| `n` | New greg session (in sessions pane) |
-| `x` | Close selected session |
-| `Enter` | Open session in claude panel |
-| `Ctrl+T` | New claude tab |
+| `Enter` | Send message |
+| `Alt+Enter` | New line in input |
+| `PgUp / PgDn` | Scroll output |
+| `Ctrl+Shift+←/→` | Switch tabs |
+| `Ctrl+T` | New tab (new Greg session) |
 | `Ctrl+W` | Close current tab |
-| `Ctrl+←/→` | Switch tabs |
+| `Ctrl+C` | Cancel running request |
 | `Ctrl+Q` | Quit panel |
+
+#### Sessions panel
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open session in claude panel |
+| `n` | New Greg session |
+| `x` | Close selected session |
+| `j / k` | Navigate list |
 
 ## How it works
 
@@ -108,3 +123,8 @@ greg-ui
 - Finished sessions move to `~/.greg/history.json` with their `claude_session_id`
 - The UI reuses conversation context via `claude -p --resume <session_id>`
 - Each session gets a mailbox at `~/.greg/mailbox/<id>/inbox.md`
+- Token usage and cost are tracked per session and aggregated monthly in the metrics section
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
