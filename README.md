@@ -8,19 +8,20 @@ Multi-agent Claude Code manager with a terminal UI.
 **greg UI** — a 3-pane terminal workspace: session history | claude panel | shell.
 
 ```
-┌──────────────┬──────────────────────────────────────┬──────────────┐
-│   sessions   │           claude-code                │   terminal   │
-│              │                                      │              │
-│  ACTIVAS     │  ● claude  abc12345                  │              │
-│  ● abc12345  │  main │ task-1                       │              │
-│              │                                      │              │
-│  MÉTRICAS    │  > your message here                 │              │
-│  tokens 12k  │                                      │              │
-│  costo $0.04 │                                      │              │
-│              │                                      │              │
-│  HISTORIAL   │                                      │              │
-│  ○ old-task  │                                      │              │
-└──────────────┴──────────────────────────────────────┴──────────────┘
+┌──────────────┬──────────────────────────────────────────────┬──────────┐
+│   sessions   │  main  │  task-1 ●                           │ terminal │
+│              │  ⠿ claude  a1b2c3  $0.042  ctx:68% · 136k/200k│          │
+│  ACTIVAS     ├──────────────────────────────────────────────┤          │
+│  ● a1b2c3    │                                              │          │
+│  ● task-1    │  output scrollable...                        │          │
+│              │                                              │          │
+│  MÉTRICAS    │                                              │          │
+│  12k tokens  │                                              │          │
+│  $0.04/mes   ├──────────────────────────────────────────────┤          │
+│              │  > your message here_                        │          │
+│  HISTORIAL   ├──────────────────────────────────────────────┤          │
+│  ○ finished  │  Enter  Alt+Enter  Ctrl+K  Ctrl+W  Ctrl+Q   │          │
+└──────────────┴──────────────────────────────────────────────┴──────────┘
 ```
 
 ## Requirements
