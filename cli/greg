@@ -78,7 +78,7 @@ _spawn_agent() {
 
   tmux new-session -d -s "${session_id}" \
     -e "GREG_SESSION_ID=${session_id}" \
-    "cd '${workspace}' && claude ${CLAUDE_FLAGS} < '${prompt_file}'; rm -f '${prompt_file}'"
+    "cd '${workspace}' && { printf '\\n'; cat '${prompt_file}'; } | claude ${CLAUDE_FLAGS}; rm -f '${prompt_file}'"
 }
 
 _coordinator_loop() {
