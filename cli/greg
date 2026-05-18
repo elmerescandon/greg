@@ -889,36 +889,20 @@ _task_revise() {
   done
 
   [[ -z "$task_id" || -z "$agent" || -z "$message" ]] && {
-    echo "Usage: greg task revise <task-id> --agent <agent-id-or-session-id> --message \"<feedback>\"" >&2
-    echo "  <agent-id>         short name used when launching (e.g. modelos, director)" >&2
-    echo "  <session-id>       greg session ID (e.g. greg-a1b2c3)" >&2
+    echo "Usage: greg task revise <task-id> --agent <greg-session-id> --message \"<feedback>\"" >&2
+    echo "  Run 'greg task status <task-id>' to see each agent's greg session ID." >&2
     exit 1
   }
 
   local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
   [[ ! -f "$meta_file" ]] && { echo "Task not found: $task_id" >&2; exit 1; }
 
-  # Resolve greg session ID: accept either agent ID (e.g. "modelos") or session ID (e.g. "greg-a1b2")
-  local greg_sid="$agent"
-  if [[ "$agent" != greg-* ]]; then
-    # Treat as agent ID — look up session ID from manifest
-    local wmf; wmf=$(jq -r '.workspace' "$meta_file")/manifest.json
-    greg_sid=$(jq -r --arg aid "$agent" '.agents[] | select(.id == $aid) | .session_id // empty' "$wmf" 2>/dev/null)
-    if [[ -z "$greg_sid" || "$greg_sid" == "null" ]]; then
-      echo "Agent not found in task manifest: ${agent}" >&2
-      echo "Available agents:" >&2
-      jq -r '.agents[] | "  \(.id)  →  \(.session_id // "(no session)")"' "$wmf" >&2
-      exit 1
-    fi
-  fi
-
   # Look up entry in history by greg session ID
   local entry
-  entry=$(jq -r "map(select(.id == \"${greg_sid}\")) | .[0]" "${HISTORY_FILE}")
+  entry=$(jq -r "map(select(.id == \"${agent}\")) | .[0]" "${HISTORY_FILE}")
   if [[ "$entry" == "null" || -z "$entry" ]]; then
-    echo "Session not found in history: ${greg_sid}" >&2
-    echo "The task coordinator archives sessions automatically when all agents finish." >&2
-    echo "If the task is still running, wait for it to complete or check: greg task status ${task_id}" >&2
+    echo "Session not found in history: ${agent}" >&2
+    echo "Run 'greg task status ${task_id}' to see the correct session IDs." >&2
     exit 1
   fi
 
