@@ -108,6 +108,8 @@ function createTab(name, claudeSession) {
     proc: null,
     cost: 0,
     contextPct: null,
+    contextTokens: null,
+    contextWindow: null,
     compactWarned: false,
     compactPending: false,
   };
@@ -219,17 +221,21 @@ function newTab(name, claudeSession, gregSessionId) {
 // ── Session ───────────────────────────────────────────────────────────────────
 let globalCost = 0;
 
-function ctxColor(pct) {
-  if (pct >= 90) return `{red-fg}ctx:${pct}%{/}`;
-  if (pct >= 75) return `{yellow-fg}ctx:${pct}%{/}`;
-  return `{gray-fg}ctx:${pct}%{/}`;
+function ctxColor(pct, tokens, window) {
+  const tokenStr = (tokens !== null && window !== null)
+    ? ` · ${Math.round(tokens / 1000)}k/${Math.round(window / 1000)}k`
+    : '';
+  const label = `ctx:${pct}%${tokenStr}`;
+  if (pct >= 90) return `{red-fg}${label}{/}`;
+  if (pct >= 75) return `{yellow-fg}${label}{/}`;
+  return `{gray-fg}${label}{/}`;
 }
 
 function renderStatus() {
   const t   = tab();
   const sid = t.gregSessionId ? t.gregSessionId.replace(/^greg-/, '') : '—';
   const cost = globalCost > 0 ? ` {gray-fg}$${globalCost.toFixed(3)}{/}` : '';
-  const ctx  = t.contextPct !== null ? ` ${ctxColor(t.contextPct)}` : '';
+  const ctx  = t.contextPct !== null ? ` ${ctxColor(t.contextPct, t.contextTokens, t.contextWindow)}` : '';
 
   if (t.running) {
     statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}claude{/} {gray-fg}${sid}{/}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
@@ -442,8 +448,16 @@ function handleEvent(raw, t) {
       if (ev.modelUsage) {
         const m = Object.values(ev.modelUsage).find(v => v.contextWindow);
         if (m) {
-          const used = (m.inputTokens || 0) + (m.cacheReadInputTokens || 0) + (m.cacheCreationInputTokens || 0);
-          t.contextPct = Math.round(used / m.contextWindow * 100);
+          // modelUsage suma tokens de todas las iteraciones del turno — usar la última
+          // iteración para saber cuánto ocupa el contexto en la llamada más reciente
+          const iters = ev.usage?.iterations;
+          const lastIter = iters?.[iters.length - 1];
+          const used = lastIter
+            ? (lastIter.input_tokens || 0) + (lastIter.cache_read_input_tokens || 0) + (lastIter.cache_creation_input_tokens || 0)
+            : (m.inputTokens || 0) + (m.cacheReadInputTokens || 0) + (m.cacheCreationInputTokens || 0);
+          t.contextPct    = Math.round(used / m.contextWindow * 100);
+          t.contextTokens = used;
+          t.contextWindow = m.contextWindow;
 
           if (t.contextPct < 75) {
             t.compactWarned = false;
