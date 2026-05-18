@@ -80,6 +80,9 @@ _spawn_agent() {
     -e "GREG_SESSION_ID=${session_id}" \
     "cd '${workspace}' && { printf '\\n'; cat '${prompt_file}'; } | claude ${CLAUDE_FLAGS}; rm -f '${prompt_file}'"
 
+  # Answer the trust prompt (reads from /dev/tty, not stdin — must use tmux send-keys)
+  (sleep 8 && tmux send-keys -t "${session_id}" "" Enter 2>/dev/null) &
+
   # Capture claude_session_id shortly after spawn and persist it
   (
     sleep 15
