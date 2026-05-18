@@ -103,6 +103,9 @@ greg task run \
 greg task list                         # show all tasks with agent statuses grouped
 greg task status mtask-xxxxxxxx        # detailed status: agents, coordinator, sessions
 greg task recover mtask-xxxxxxxx       # unblock a task if an agent crashed mid-work
+greg task revise mtask-xxxxxxxx \
+  --agent greg-xxxxxxxx \
+  --message "Go deeper on section 3"  # resume a finished agent with feedback
 ```
 
 **How it works:**
@@ -116,6 +119,20 @@ greg task recover mtask-xxxxxxxx       # unblock a task if an agent crashed mid-
 
 **Resilience:** If an agent's session crashes before writing `done`, the coordinator detects this and auto-recovers after 120 seconds. Use `greg task recover` to force immediate recovery.
 
+**Revising results:** Once a task is complete, use `greg task revise` to resume any agent with follow-up feedback. The agent resumes its Claude session with full conversation context. Find the agent's greg session ID in `greg task status <task-id>` or `greg list`.
+
+### Skills
+
+Agent behavior is defined by skill templates in `skills/`:
+
+| File | Purpose |
+|------|---------|
+| `greg-mailbox.md` | Shared workspace/messaging protocol — injected into every agent prompt |
+| `greg-director.md` | Director prompt: coordinate team, cross-pollinate, trigger synthesis |
+| `greg-teammate.md` | Specialist prompt: progressive writing, proactive reading, status protocol |
+
+Templates support `{{TASK_ID}}`, `{{AGENT_ID}}`, `{{AGENT_ROLE}}`, `{{TASK_GOAL}}`, `{{WORKSPACE}}` variables and `{{> greg-mailbox}}` partial includes.
+
 ### UI
 
 ```bash
@@ -128,7 +145,12 @@ greg-ui
 |-----|--------|
 | `Enter` | Send message |
 | `Alt+Enter` | New line in input |
-| `PgUp / PgDn` | Scroll output |
+| `↑ / ↓` | Navigate input history |
+| `← / →` | Move cursor in input |
+| `Home / End` | Jump to start/end of input |
+| `PgUp / PgDn` | Scroll output (big jump) |
+| `Ctrl+↑ / Ctrl+↓` | Scroll output (line by line) |
+| `Ctrl+K` | Pre-fill `/compact ` for guided context compaction |
 | `Ctrl+Shift+←/→` | Switch tabs |
 | `Ctrl+T` | New tab (new Greg session) |
 | `Ctrl+W` | Close current tab |

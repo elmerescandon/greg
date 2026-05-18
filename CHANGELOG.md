@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-05-17
+
+### Added
+
+**Multi-agent task system (`greg task`)**
+- `greg task run --goal "..." --agent "id:role" [--agent ...]` — launch a team of parallel agents; director is auto-added
+- `greg task status <task-id>` — per-agent status, tmux state, coordinator health
+- `greg task list` — flat list of all multi-agent tasks
+- `greg task recover <task-id>` — force-complete crashed agents and restart coordinator
+- `greg task revise <task-id> --agent <session-id> --message "<feedback>"` — resume a finished agent with feedback
+- Background coordinator polls status files every 15s; when all agents write `done`, triggers a final synthesizer
+- Crash recovery: if an agent's tmux session dies before writing `done`, coordinator auto-completes it after 120s
+- Synthesizer produces `final-output.md` from all agent outputs and director synthesis notes
+
+**Skills system**
+- `skills/greg-mailbox.md` — shared workspace/messaging protocol injected into every agent prompt
+- `skills/greg-director.md` — director agent prompt: coordinate team, cross-pollinate, unblock agents, trigger synthesis
+- `skills/greg-teammate.md` — specialist agent prompt: progressive writing, proactive reading, status protocol
+- `_resolve_skill()` — resolves `{{> greg-mailbox}}` partials and `{{TASK_ID}}`, `{{AGENT_ID}}`, `{{AGENT_ROLE}}`, `{{TASK_GOAL}}`, `{{WORKSPACE}}` variables
+
+**UI — claude-panel.js**
+- Visible cursor in input with `←/→` navigation and `Home`/`End` keys
+- Input history: `↑/↓` to cycle through sent messages
+- `Ctrl+K` — pre-fill `/compact ` for guided context compaction
+- Context color: gray <75%, yellow ≥75%, red ≥90%
+- Compaction warnings: alert at 90%, auto-prompt at 95%; pre-fills `/compact ` when turn ends with context at limit
+- Tab badge — green dot on inactive tabs with unread output
+- `compactPending` preserved across tab switches; prompt appears when switching to the tab
+- `Ctrl+↑/↓` — scroll output line by line
+
+### Changed
+- `greg list` now groups multi-agent tasks separately (with per-agent status) above standalone sessions
+- Mouse scroll handling moved to `screen.on('mouse', ...)` for more reliable trackpad support
+- `closeTab()` now calls `greg kill` instead of sending SIGINT directly to the process
+- `cmdMtime` initialized to current file mtime on startup to ignore stale IPC commands from previous sessions
+- Footer help bar updated with all new keybindings
+
 ## [0.2.0] - 2026-05-18
 
 ### Added
