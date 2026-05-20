@@ -682,7 +682,7 @@ screen.on('keypress', (ch, key) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function escTags(s) { return String(s).replace(/\{/g, '\\{'); }
+function escTags(s) { return String(s).replace(/\{/g, '{open}'); }
 
 function formatToolLabel(name, input) {
   if (!input) return '';
