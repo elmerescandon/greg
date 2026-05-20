@@ -279,9 +279,17 @@ function stopSpinner() {
 // ── Output helpers ────────────────────────────────────────────────────────────
 let currentAction = '';
 
+function safeLog(line) {
+  try {
+    output.log(line);
+  } catch {
+    output.log(String(line).replace(/\{[^}]*\}/g, ''));
+  }
+}
+
 function tabLog(line, t) {
   if (!t || t === tab()) {
-    output.log(line);
+    safeLog(line);
     if (!tab().scrollLock) output.setScrollPerc(100);
   } else {
     t.lines.push(line);
