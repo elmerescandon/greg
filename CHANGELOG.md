@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-05-20
+
+### Fixed
+- UI — `claude-panel.js`: write `\n` to stdin immediately after spawn to satisfy claude's 3-second stdin check and eliminate the "Warning: no stdin data received in 3s" message that appeared on every message send; prompt is delivered via `-p`, not stdin, so `AskUserQuestion` stdin writes are unaffected
+
 ## [0.3.1] - 2026-05-17
 
 ### Added

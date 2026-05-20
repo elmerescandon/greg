@@ -364,6 +364,7 @@ function send(text) {
   if (t.claudeSession) args.push('--resume', t.claudeSession);
 
   t.proc = spawn('claude', args, { cwd: VAULT, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.proc.stdin.write('\n'); // satisfy claude's 3s stdin check; prompt arrives via -p, not stdin
   let buf = '';
 
   t.proc.stdout.on('data', chunk => {
