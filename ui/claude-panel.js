@@ -8,6 +8,21 @@ const path      = require('path');
 const os        = require('os');
 
 const VAULT        = process.env.GREG_VAULT || os.homedir();
+
+// ── Opciones de modelo y esfuerzo ─────────────────────────────────────────────
+const MODEL_OPTIONS = [
+  { id: 'claude-opus-4-6',           label: 'Opus 4.6',   description: '1M ctx · máxima calidad' },
+  { id: 'claude-opus-4-7',           label: 'Opus 4.7',   description: '200k ctx · más reciente' },
+  { id: 'claude-sonnet-4-6',         label: 'Sonnet 4.6', description: 'balanceado · rápido' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5',  description: 'económico · muy rápido' },
+];
+const EFFORT_OPTIONS = [
+  { id: 'low',    label: 'low',    description: 'mínimo razonamiento · más rápido' },
+  { id: 'medium', label: 'medium', description: 'balanceado' },
+  { id: 'high',   label: 'high',   description: 'mayor razonamiento · recomendado' },
+  { id: 'xhigh',  label: 'xhigh',  description: 'razonamiento extendido' },
+  { id: 'max',    label: 'max',    description: 'máximo esfuerzo · más lento' },
+];
 const GREG_HOME    = path.join(os.homedir(), '.greg');
 const SESSION_FILE = path.join(GREG_HOME, 'claude-ui-session');
 const CMD_FILE     = path.join(GREG_HOME, 'ui-cmd.json');
@@ -124,6 +139,8 @@ function createTab(name, claudeSession) {
     compactWarned: false,
     compactPending: false,
     pendingQuestion: null,
+    model: 'claude-opus-4-6',
+    effort: 'high',
   };
 }
 
@@ -170,7 +187,7 @@ function switchTab(newIdx) {
   if (newIdx < 0 || newIdx >= tabs.length) return;
   // Guardar estado del tab actual
   if (tabs[tabIdx]) {
-    tabs[tabIdx].content   = output.getContent();
+    tabs[tabIdx].content   = output.getContent() || '';
     tabs[tabIdx].inputBuf  = inputBuf;
     tabs[tabIdx].cursorPos = cursorPos;
   }
@@ -178,8 +195,8 @@ function switchTab(newIdx) {
   inputBuf  = tab().inputBuf;
   cursorPos = tab().cursorPos;
   tab().hasNew = false;
-  output.setContent(tab().content);
-  for (const line of tab().lines) output.log(line);
+  output.setContent(tab().content || '');
+  for (const line of tab().lines) safeLog(line);
   tab().lines = [];
   output.setScrollPerc(100);
   renderTabBar();
@@ -207,7 +224,7 @@ function closeTab() {
   tabs.splice(tabIdx, 1);
   tabIdx   = newIdx;
   inputBuf = tab().inputBuf;
-  output.setContent(tab().content);
+  output.setContent(tab().content || '');
   output.setScrollPerc(100);
   renderTabBar();
   renderStatus();
@@ -226,6 +243,7 @@ function newTab(name, claudeSession, gregSessionId) {
   } else {
     tabLog('{gray-fg}nueva sesión de Greg{/}');
     tabLog('');
+    showConfigSelection(t);
   }
   renderInput();
   screen.render();
@@ -249,11 +267,13 @@ function renderStatus() {
   const sid = t.gregSessionId ? t.gregSessionId.replace(/^greg-/, '') : '—';
   const cost = globalCost > 0 ? ` {gray-fg}$${globalCost.toFixed(3)}{/}` : '';
   const ctx  = t.contextPct !== null ? ` ${ctxColor(t.contextPct, t.contextTokens, t.contextWindow)}` : '';
+  const modelShort = (t.model || '').replace('claude-', '').replace(/-\d{8}$/, '');
+  const config = t.model ? ` {gray-fg}[${modelShort}·${t.effort || '?'}]{/}` : '';
 
   if (t.running) {
-    statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}Greg{/} {gray-fg}${sid}{/}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
+    statusBar.setContent(`  {yellow-fg}${FRAMES[spinIdx]}{/} {bold}Greg{/} {gray-fg}${sid}{/}${config}${currentAction ? ` {gray-fg}${escTags(currentAction)}{/}` : ''}${cost}${ctx}`);
   } else {
-    statusBar.setContent(`  {green-fg}●{/} {bold}Greg{/} {gray-fg}${sid}{/}${cost}${ctx}`);
+    statusBar.setContent(`  {green-fg}●{/} {bold}Greg{/} {gray-fg}${sid}{/}${config}${cost}${ctx}`);
   }
   screen.render();
 }
@@ -364,6 +384,8 @@ function send(text) {
   startSpinner();
 
   const args = [
+    '--model', t.model || 'claude-opus-4-6',
+    '--effort', t.effort || 'high',
     '-p', text,
     '--output-format', 'stream-json',
     '--verbose',
@@ -760,6 +782,35 @@ function renderQuestionOverlay() {
   screen.render();
 }
 
+function showConfigSelection(t) {
+  t.pendingQuestion = {
+    id: '__config__',
+    configMode: true,
+    questions: [
+      {
+        question: '¿Qué modelo quieres usar?',
+        header: 'Modelo',
+        options: MODEL_OPTIONS,
+        multiSelect: false,
+        defaultIdx: 0,
+      },
+      {
+        question: '¿Qué nivel de esfuerzo?',
+        header: 'Esfuerzo',
+        options: EFFORT_OPTIONS,
+        multiSelect: false,
+        defaultIdx: 2,
+      },
+    ],
+    currentQ: 0,
+    selectedIdx: 0,
+    answers: {},
+  };
+  tabLog(`{cyan-fg}? ¿Qué modelo quieres usar?{/}`, t);
+  tabLog('', t);
+  if (t === tab()) renderQuestionOverlay();
+}
+
 function submitAnswer() {
   const t = tab();
   const q = t.pendingQuestion;
@@ -769,6 +820,32 @@ function submitAnswer() {
   const selected = qData.options[q.selectedIdx];
   q.answers[qData.question] = selected.label;
   tabLog(`{green-fg}  ✓ ${escTags(selected.label)}{/}`, t);
+
+  if (q.configMode) {
+    if (q.currentQ === 0) t.model = selected.id;
+    else if (q.currentQ === 1) t.effort = selected.id;
+
+    q.currentQ++;
+    if (q.currentQ < q.questions.length) {
+      q.selectedIdx = q.questions[q.currentQ].defaultIdx ?? 0;
+      const next = q.questions[q.currentQ];
+      tabLog('', t);
+      tabLog(`{cyan-fg}? ${escTags(next.question)}{/}`, t);
+      tabLog('', t);
+      renderQuestionOverlay();
+    } else {
+      t.pendingQuestion = null;
+      questionOverlay.hide();
+      const inputH = inputLine.height || 3;
+      output.bottom = inputH + 2;
+      tabLog('', t);
+      tabLog(`{gray-fg}listo: ${escTags(t.model)} · esfuerzo ${t.effort}{/}`, t);
+      tabLog('', t);
+      renderStatus();
+      screen.render();
+    }
+    return;
+  }
 
   q.currentQ++;
   if (q.currentQ < q.questions.length) {
@@ -800,4 +877,5 @@ tabLog('{gray-fg}Greg — escribe tu mensaje y presiona Enter{/}');
 if (t.claudeSession) tabLog(`{gray-fg}sesión previa cargada: ${t.claudeSession.slice(0, 8)}…{/}`);
 tabLog('');
 renderInput();
+if (!t.claudeSession) showConfigSelection(t);
 screen.render();
