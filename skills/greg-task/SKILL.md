@@ -18,9 +18,7 @@ Cuando corres `greg task run`, sucede lo siguiente:
 
 3. Cada agente recibe un prompt con su rol y acceso al workspace compartido. Trabajan **en paralelo** dentro de sesiones tmux independientes.
 
-4. Un coordinator en background vigila los status. Cuando **todos** marcan `done`, lanza automáticamente un **synthesizer** que integra los outputs en un documento final (`final-output.md`).
-
-5. Al terminar, puedes revisar cualquier agente con `greg task revise` e invocar `/greg-revise` para cerrar limpiamente.
+4. Un coordinator en background vigila los status. Cuando **todos** los agentes (incluyendo el director) marcan `done`, cierra la tarea automáticamente (`coordinator_status: completed`).
 
 ---
 
@@ -108,30 +106,18 @@ greg task run \
 greg task status <task-id>     # ver estado de cada agente en tiempo real
 greg task list                 # listar todas las tareas multi-agente
 greg list                      # ver todas las sesiones y su status [running/active/finished]
+greg peek <task-id>            # ver las últimas 30 líneas de todos los agentes de una tarea
+greg peek <session-id>         # ver las últimas 30 líneas de un agente específico
+greg peek <id> -n 50           # cambiar la cantidad de líneas
 greg attach <session-id>       # entrar a ver una sesión en vivo
 ```
 
-## Revisar un agente cuando la tarea termina
+## Leer los resultados cuando la tarea termina
 
-Una vez que el synthesizer produjo `final-output.md`, puedes retomar cualquier agente con feedback.
-
-**Paso 1** — obtén el greg session ID del agente:
+Una vez que `coordinator_status: completed`, cada agente dejó su output en `workspace/<agent-id>.md`. El director dejó sus notas de síntesis en `workspace/director-synthesis-notes.md` — ese es el documento consolidado.
 
 ```bash
-greg task status <task-id>
-# Muestra algo como:
-#   modelos   [done]   greg-a1b2c3 (tmux: stopped)   Analiza benchmarks...
-#   director  [done]   greg-d4e5f6 (tmux: stopped)   Coordina el equipo...
+greg task status <task-id>     # ver qué agente produjo qué
+cat ~/.greg/multi-tasks/<task-id>/workspace/director-synthesis-notes.md
+cat ~/.greg/multi-tasks/<task-id>/workspace/<agent-id>.md
 ```
-
-**Paso 2** — lanza la revisión con ese session ID:
-
-```bash
-greg task revise <task-id> \
-  --agent greg-a1b2c3 \
-  --message "El análisis de benchmarks de Gemini está incompleto — profundiza en MMLU y compara con GPT-5."
-```
-
-El agente reanuda su sesión de Claude con contexto completo y recibe el mensaje automáticamente.
-
-**Paso 3** — al terminar la revisión, el agente invoca `/greg-revise` dentro de su sesión para cerrarse limpiamente y archivar.

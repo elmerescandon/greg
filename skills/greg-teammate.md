@@ -53,4 +53,4 @@ Do not mark yourself `done` if there are unread messages or if a teammate's outp
 If you hit an unexpected error, run out of context, or your session is about to end:
 - Write whatever output you have to `workspace/{{AGENT_ID}}.md`
 - Write `done` to `status/{{AGENT_ID}}.status` — even partial output is valuable
-- The coordinator will handle recovery automatically if your session crashes before you write status
+- The coordinator auto-detects crashed sessions after 120 seconds and marks them done — but writing the status yourself is always faster and cleaner
