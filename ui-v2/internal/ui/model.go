@@ -67,11 +67,18 @@ type Model struct {
 	viewMode              ViewMode
 	sidebarFocused        bool
 	sidebarIdx            int
-	multiSelectedIdx      int
-	multiDetailMode       bool
-	multiAgentIdx         int
-	multiAgentView        bool
+	multiSelectedIdx       int
+	multiDetailMode        bool
+	multiAgentIdx          int
+	multiAgentView         bool
 	multiAgentScrollOffset int
+
+	// Task detail chat/office view
+	taskChatInput        string
+	taskChatCursorPos    int
+	taskChatScrollOffset int
+	activeMsgChannel     int
+	taskChatFocused      bool
 }
 
 // Messages
@@ -640,46 +647,112 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Level 2: task detail with agent list
+		// Level 2: task detail (office view)
 		if m.multiDetailMode {
-			switch k {
-			case "escape", "backspace":
-				m.multiDetailMode = false
-				m.multiAgentIdx = 0
-				return m, nil
-			}
 			tasks, _ := task.LoadTasks()
 			n := len(tasks)
 			sel := m.multiSelectedIdx
 			if sel >= n {
 				sel = n - 1
 			}
-			var agents []task.Agent
+			var curTask *task.Task
 			if sel >= 0 && sel < n {
-				agents = task.AllAgents(tasks[sel])
+				t := tasks[sel]
+				curTask = &t
 			}
+
+			// Input-focused mode: text editing
+			if m.taskChatFocused {
+				switch k {
+				case "escape":
+					m.taskChatFocused = false
+					m.taskChatInput = ""
+					m.taskChatCursorPos = 0
+				case "enter":
+					if strings.TrimSpace(m.taskChatInput) == "" {
+						m.taskChatFocused = false
+						m.taskChatInput = ""
+						m.taskChatCursorPos = 0
+					} else if curTask != nil {
+						m.sendTaskMessage(curTask.TaskID, m.taskChatInput)
+						m.taskChatInput = ""
+						m.taskChatCursorPos = 0
+						m.taskChatFocused = false
+					}
+				case "backspace":
+					if m.taskChatCursorPos > 0 {
+						m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos-1] + m.taskChatInput[m.taskChatCursorPos:]
+						m.taskChatCursorPos--
+					}
+				default:
+					if msg.Text != "" {
+						m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos] + msg.Text + m.taskChatInput[m.taskChatCursorPos:]
+						m.taskChatCursorPos += len(msg.Text)
+					}
+				}
+				return m, nil
+			}
+
+			// Navigation mode
 			switch k {
+			case "escape", "backspace":
+				m.multiDetailMode = false
+				m.multiAgentIdx = 0
+				m.taskChatInput = ""
+				m.taskChatCursorPos = 0
+				m.taskChatScrollOffset = 0
+				m.activeMsgChannel = 0
+				m.taskChatFocused = false
+			case "tab", "right":
+				if curTask != nil {
+					channels := listMsgChannels(curTask.Workspace)
+					if len(channels) > 0 {
+						m.activeMsgChannel = (m.activeMsgChannel + 1) % len(channels)
+						m.taskChatScrollOffset = 0
+					}
+				}
+			case "left":
+				if curTask != nil {
+					channels := listMsgChannels(curTask.Workspace)
+					if len(channels) > 0 {
+						m.activeMsgChannel = (m.activeMsgChannel - 1 + len(channels)) % len(channels)
+						m.taskChatScrollOffset = 0
+					}
+				}
 			case "up":
-				if m.multiAgentIdx > 0 {
-					m.multiAgentIdx--
-				}
+				m.taskChatScrollOffset++
 			case "down":
-				if m.multiAgentIdx < len(agents)-1 {
-					m.multiAgentIdx++
+				if m.taskChatScrollOffset > 0 {
+					m.taskChatScrollOffset--
 				}
+			case "pgup":
+				m.taskChatScrollOffset += m.height / 2
+			case "pgdown":
+				m.taskChatScrollOffset -= m.height / 2
+				if m.taskChatScrollOffset < 0 {
+					m.taskChatScrollOffset = 0
+				}
+			case "f", "i":
+				m.taskChatFocused = true
 			case "enter":
-				if m.multiAgentIdx < len(agents) {
-					m.multiAgentView = true
-					m.multiAgentScrollOffset = 0
+				if curTask != nil {
+					agents := task.AllAgents(*curTask)
+					if m.multiAgentIdx < len(agents) {
+						m.multiAgentView = true
+						m.multiAgentScrollOffset = 0
+					}
 				}
 			case "x":
-				if sel >= 0 && sel < n && m.multiAgentIdx < len(agents) {
-					tid := tasks[sel].TaskID
-					aid := agents[m.multiAgentIdx].ID
-					go func(taskID, agentID string) {
-						c := osexec.Command("greg", "task", "done", taskID, agentID)
-						c.Run()
-					}(tid, aid)
+				if curTask != nil {
+					agents := task.AllAgents(*curTask)
+					if m.multiAgentIdx < len(agents) {
+						tid := curTask.TaskID
+						aid := agents[m.multiAgentIdx].ID
+						go func(taskID, agentID string) {
+							c := osexec.Command("greg", "task", "done", taskID, agentID)
+							c.Run()
+						}(tid, aid)
+					}
 				}
 			}
 			return m, nil
@@ -690,6 +763,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.multiDetailMode = true
 			m.multiAgentIdx = 0
+			m.taskChatInput = ""
+			m.taskChatCursorPos = 0
+			m.taskChatScrollOffset = 0
+			m.activeMsgChannel = 0
+			m.taskChatFocused = false
 		case "up":
 			if m.multiSelectedIdx > 0 {
 				m.multiSelectedIdx--
@@ -848,6 +926,34 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+func (m *Model) sendTaskMessage(taskID, msg string) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	go func(tid, text string) {
+		c := osexec.Command("greg", "task", "message", tid, text)
+		c.Run()
+	}(taskID, msg)
+}
+
+// listMsgChannels returns sorted basenames of *.md files in workspace/messages/.
+func listMsgChannels(workspace string) []string {
+	dir := workspace + "/messages"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func loadStandaloneSessions() []session.Session {

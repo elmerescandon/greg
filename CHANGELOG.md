@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-06-15
+
+### Added
+
+**UI-v2 — Office View (Agente tab)**
+- Animated ASCII tamagotchi sprites per agent status: `(o_o) ⌨▒░` working, `(-_-) zzZ` waiting, `(o_O)! ‼‼` needs-help, `(^_^) ✔✔` done, `]=[ (^o^)` director
+- Sprites animate on the existing tick cycle (80ms) — working cycles typing bar, waiting cycles Zs, director wiggles crown
+- Office floor layout: agent desks rendered in a responsive grid with colored borders per status
+- Message channel tabs: navigable with `←/→` arrows, displays all `messages/*.md` files from the task workspace
+- Chat panel: renders selected channel file as scrollable conversation with markdown header highlighting
+- Chat input: press `f`/`i` to focus, type message, `Enter` to send via `greg task message`, `Esc` to cancel and return to navigation
+- `sendTaskMessage()` executes `greg task message <task-id> <msg>` as subprocess
+
+**CLI**
+- `greg task message <task-id> "<msg>"` — send a message to the director
+- `greg peek <task-id|session-id> [-n lines]` — tail agent output
+- `greg task resume <task-id> <agent-id>` — resume a finished agent
+- `capture_id` mechanism for reliable `claude_session_id` lookup after spawn
+- `SESSION_ID` template variable in skill resolution
+
+### Changed
+- Task system moved to schema_version 2: director synthesis notes replace synthesizer agent
+- Coordinator marks task completed when all agents (including director) mark `done`
+- Updated greg-task, greg-director, greg-teammate skills for schema v2 flow
+
 ## [0.3.2] - 2026-05-20
 
 ### Fixed

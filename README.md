@@ -116,22 +116,28 @@ greg task revise mtask-xxxxxxxx \
 3. Agents write to `~/.greg/multi-tasks/<task-id>/workspace/<agent>.md` progressively
 4. Agents can message each other via `messages/<from>→<to>.md`
 5. A background **coordinator** polls status files every 15s
-6. When all agents write `done`, the coordinator spawns a **synthesizer** that produces `final-output.md`
+6. When all agents (including director) mark `done`, the coordinator marks the task as `completed`
+7. Director leaves synthesis notes in `workspace/director-synthesis-notes.md`
 
-**Resilience:** If an agent's session crashes before writing `done`, the coordinator detects this and auto-recovers after 120 seconds. Use `greg task recover` to force immediate recovery.
-
-**Revising results:** Once a task is complete, find the agent's session ID with `greg task status <task-id>`, then resume it:
+**Messaging:** Send messages to the director mid-task:
 
 ```bash
-greg task status mtask-xxxxxxxx
-# shows each agent's greg session ID (e.g. greg-a1b2c3)
-
-greg task revise mtask-xxxxxxxx \
-  --agent greg-a1b2c3 \
-  --message "Go deeper on the Gemini benchmarks section."
+greg task message mtask-xxxxxxxx "How is the analysis going?"
 ```
 
-The agent resumes with full Claude conversation context and receives the message automatically. When done, it invokes `/greg-revise` inside its session to close and archive itself cleanly.
+**Monitoring:**
+
+```bash
+greg peek mtask-xxxxxxxx           # tail last 30 lines of all agents
+greg peek greg-xxxxxxxx            # tail a specific agent session
+greg peek mtask-xxxxxxxx -n 50     # custom line count
+```
+
+**Resuming agents:**
+
+```bash
+greg task resume mtask-xxxxxxxx interaction   # resume a finished agent
+```
 
 ### Skills
 
@@ -144,11 +150,36 @@ The agent resumes with full Claude conversation context and receives the message
 | `greg-revise` | `/greg-revise` — close a revision session and archive it cleanly |
 | `greg-learn` | `/greg-learn` — consolidate learnings into persistent memory |
 
-### UI
+### UI (Go — ui-v2)
 
 ```bash
-greg-ui
+cd ui-v2 && go build -o greg-ui . && ./greg-ui
 ```
+
+Two views: **Chat** (Ctrl+1) and **Agente** (Ctrl+2).
+
+#### Agente tab — Office View
+
+When viewing a task detail, agents appear as animated ASCII tamagotchi desks:
+
+```
+┌──────────────────────┐  ┌──────────────────────┐
+│       ]=[            │  │      (o_o)            │
+│      (^o^)           │  │       ⌨▒░             │
+│  director   working  │  │  datos      working   │
+│  role: coordinator   │  │  role: data gathering  │
+└──────────────────────┘  └──────────────────────┘
+```
+
+Below the desks: navigable message channel tabs and a chat panel for reading/sending messages.
+
+| Key | Action |
+|-----|--------|
+| `←/→` | Switch message channel |
+| `↑/↓` | Scroll chat |
+| `f` or `i` | Focus chat input |
+| `Enter` | Send message (in input) / View agent output (in nav) |
+| `Esc` | Cancel input / Go back |
 
 #### Claude panel
 
