@@ -131,7 +131,7 @@ source ~/.zshrc
 ### TUI (optional)
 
 ```bash
-cd ui-v2
+cd ui
 go build -o greg-ui .
 ln -s "$(pwd)/greg-ui" ~/.local/bin/greg-ui
 ```

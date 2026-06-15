@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2026-06-15
+
+### Removed
+- `ui/` (Node.js/blessed) — deleted from the repo
+- `ui-v2/` renamed to `ui/` — the Go/bubbletea UI is now simply `ui/`
+
 ## [0.4.1] - 2026-06-15
 
 ### Fixed
