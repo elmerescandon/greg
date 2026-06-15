@@ -22,9 +22,12 @@ func (m Model) View() tea.View {
 	topBar := m.viewTopBar()
 
 	var content string
-	if m.viewMode == ViewMultiple {
+	switch m.viewMode {
+	case ViewMultiple:
 		content = m.viewMultiple()
-	} else {
+	case ViewGraficas:
+		content = m.viewGraficas()
+	default:
 		content = m.viewMetricas()
 	}
 
@@ -35,13 +38,14 @@ func (m Model) View() tea.View {
 	return v
 }
 
-func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd int) {
+func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd, grafStart, grafEnd int) {
 	gregW := lipgloss.Width(GregLabel.Render(" GREG"))
 	metW := lipgloss.Width(ViewActive.Render("Chat"))
 	mulW := lipgloss.Width(ViewActive.Render("Agente"))
+	grafW := lipgloss.Width(ViewActive.Render("Métricas"))
 	gap := 2
 	margin := 1
-	rightTotal := metW + gap + mulW + margin
+	rightTotal := metW + gap + mulW + gap + grafW + margin
 	leftPad := m.width - gregW - rightTotal
 	if leftPad < 0 {
 		leftPad = 0
@@ -50,6 +54,8 @@ func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd int)
 	metEnd = metStart + metW
 	mulStart = metEnd + gap
 	mulEnd = mulStart + mulW
+	grafStart = mulEnd + gap
+	grafEnd = grafStart + grafW
 	return
 }
 
@@ -57,7 +63,7 @@ func (m Model) viewTopBar() string {
 	gregRendered := GregLabel.Render(" GREG")
 	gregW := lipgloss.Width(gregRendered)
 
-	var metStyle, mulStyle lipgloss.Style
+	var metStyle, mulStyle, grafStyle lipgloss.Style
 	if m.viewMode == ViewMetricas {
 		metStyle = ViewActive
 	} else {
@@ -68,14 +74,21 @@ func (m Model) viewTopBar() string {
 	} else {
 		mulStyle = ViewInactive
 	}
+	if m.viewMode == ViewGraficas {
+		grafStyle = ViewActive
+	} else {
+		grafStyle = ViewInactive
+	}
 
 	metRendered := metStyle.Render("Chat")
 	mulRendered := mulStyle.Render("Agente")
+	grafRendered := grafStyle.Render("Métricas")
 	metW := lipgloss.Width(metRendered)
 	mulW := lipgloss.Width(mulRendered)
+	grafW := lipgloss.Width(grafRendered)
 	gap := 2
 	margin := 1
-	rightTotal := metW + gap + mulW + margin
+	rightTotal := metW + gap + mulW + gap + grafW + margin
 
 	leftPad := m.width - gregW - rightTotal
 	if leftPad < 0 {
@@ -84,19 +97,25 @@ func (m Model) viewTopBar() string {
 
 	row1 := gregRendered + strings.Repeat(" ", leftPad) +
 		metRendered + strings.Repeat(" ", gap) +
-		mulRendered + strings.Repeat(" ", margin)
+		mulRendered + strings.Repeat(" ", gap) +
+		grafRendered + strings.Repeat(" ", margin)
 
 	// Row 2: thick ━ under the active button
 	leftThinW := gregW + leftPad
 	var row2 string
-	if m.viewMode == ViewMultiple {
+	switch m.viewMode {
+	case ViewMultiple:
 		row2 = SepDim.Render(strings.Repeat("─", leftThinW+metW+gap)) +
 			SepActive.Render(strings.Repeat("━", mulW)) +
+			SepDim.Render(strings.Repeat("─", gap+grafW+margin))
+	case ViewGraficas:
+		row2 = SepDim.Render(strings.Repeat("─", leftThinW+metW+gap+mulW+gap)) +
+			SepActive.Render(strings.Repeat("━", grafW)) +
 			SepDim.Render(strings.Repeat("─", margin))
-	} else {
+	default:
 		row2 = SepDim.Render(strings.Repeat("─", leftThinW)) +
 			SepActive.Render(strings.Repeat("━", metW)) +
-			SepDim.Render(strings.Repeat("─", gap+mulW+margin))
+			SepDim.Render(strings.Repeat("─", gap+mulW+gap+grafW+margin))
 	}
 
 	return row1 + "\n" + row2

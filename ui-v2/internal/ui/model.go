@@ -23,6 +23,7 @@ type ViewMode int
 const (
 	ViewMetricas ViewMode = iota
 	ViewMultiple
+	ViewGraficas
 )
 
 type ModelOption struct {
@@ -65,6 +66,7 @@ type Model struct {
 	savedInput     string
 	vault          string
 	viewMode              ViewMode
+	metricsShowCost       bool
 	sidebarFocused        bool
 	sidebarIdx            int
 	multiSelectedIdx       int
@@ -205,11 +207,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		if msg.Y <= 1 {
-			ms, me, us, ue := m.viewBarButtonPositions()
+			ms, me, us, ue, gs, ge := m.viewBarButtonPositions()
 			if msg.X >= ms && msg.X < me {
 				m.viewMode = ViewMetricas
 			} else if msg.X >= us && msg.X < ue {
 				m.viewMode = ViewMultiple
+			} else if msg.X >= gs && msg.X < ge {
+				m.viewMode = ViewGraficas
 			}
 		} else if msg.Y == 2 {
 			if i := m.tabAtX(msg.X); i >= 0 {
@@ -517,8 +521,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewMetricas
 		return m, nil
 
-	case "ctrl+2":
+	case "ctrl+2", "ctrl+space":
 		m.viewMode = ViewMultiple
+		return m, nil
+
+	case "ctrl+3":
+		m.viewMode = ViewGraficas
 		return m, nil
 
 	case "ctrl+c":
@@ -569,6 +577,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if t.PendingQuestion != nil {
 		return m.handleQuestionKey(msg)
+	}
+
+	if m.viewMode == ViewGraficas {
+		switch k {
+		case "s":
+			m.metricsShowCost = false
+			return m, nil
+		case "c":
+			m.metricsShowCost = true
+			return m, nil
+		}
+		return m, nil
 	}
 
 	if m.viewMode == ViewMetricas {
