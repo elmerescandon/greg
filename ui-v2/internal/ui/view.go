@@ -430,9 +430,9 @@ func (m Model) viewOfficeFloor(t task.Task) string {
 			isDirector := a.ID == "director" || a.IsSynthesizer
 			var frame string
 			if isDirector {
-				frame = spriteDirector[m.spinIdx%4]
+				frame = spriteDirector[m.spriteIdx]
 			} else {
-				frame = agentSpriteFrame(status, m.spinIdx)
+				frame = agentSpriteFrame(status, m.spriteIdx)
 			}
 			deskLines := renderDeskBox(a, status, frame, isDirector, deskW)
 			deskStrings[i] = strings.Join(deskLines, "\n")

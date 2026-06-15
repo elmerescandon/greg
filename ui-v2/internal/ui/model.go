@@ -61,6 +61,8 @@ type Model struct {
 	height         int
 	globalCost     float64
 	spinIdx        int
+	spriteTick     int
+	spriteIdx      int
 	inputHistory   []string
 	historyIdx     int
 	savedInput     string
@@ -142,6 +144,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.spinIdx = (m.spinIdx + 1) % len(spinFrames)
+		m.spriteTick = (m.spriteTick + 1) % 4
+		if m.spriteTick == 0 {
+			m.spriteIdx = (m.spriteIdx + 1) % 4
+		}
 		return m, tickCmd()
 
 	case claudeEventMsg:
@@ -587,6 +593,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.metricsShowCost = true
 			return m, nil
+		case "1":
+			m.viewMode = ViewMetricas
+			return m, nil
+		case "2":
+			m.viewMode = ViewMultiple
+			return m, nil
 		}
 		return m, nil
 	}
@@ -812,6 +824,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					c.Run()
 				}(tid)
 			}
+		case "1":
+			m.viewMode = ViewMetricas
+			return m, nil
+		case "3":
+			m.viewMode = ViewGraficas
+			return m, nil
 		}
 		return m, nil
 	}
