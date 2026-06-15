@@ -59,7 +59,7 @@ When fully complete:
 
 ## Resilience: always write your status
 
-The coordinator monitors your status file to know when to trigger the final synthesis. If you never write `done`, the coordinator will auto-recover after 120 seconds by detecting that your session ended with output — but it's always better to write it yourself.
+The coordinator monitors your status file to know when to close the task. If you never write `done`, the coordinator will auto-detect after 120 seconds that your session ended with output and mark you done — but it's always better to write it yourself.
 
 **Rules:**
 - Write `done` as the very LAST action before your session ends, even if something went wrong
