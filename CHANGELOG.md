@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 
 **TUI**
 - `ui-v2/` — new terminal UI written in Go with bubbletea, replacing the Node.js/blessed UI; includes Chat and Agente tabs
+- Agente tab — Office View: animated ASCII tamagotchi sprites per agent status (`(o_o) ⌨▒░` working, `(-_-) zzZ` waiting, `(o_O)!` needs-help, `(^_^) ✔✔` done, `]=[ (^o^)` director)
+- Message channel tabs navigable with `←/→` arrows, displaying all `messages/*.md` from the task workspace
+- Chat panel with scrollable message history and markdown header highlighting
+- Chat input: `f`/`i` to focus, `Enter` to send via `greg task message`, `Esc` to cancel and return to navigation
 
 ### Changed
 - Task system v2 (`schema_version: 2`): the synthesizer agent is removed; the director now produces consolidated output directly in `workspace/director-synthesis-notes.md`

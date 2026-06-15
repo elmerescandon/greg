@@ -326,184 +326,218 @@ func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
 
 func (m Model) viewTaskDetail(t task.Task) string {
 	h := m.height - 2
-	footerH := 2
 	var lines []string
 
-	// Breadcrumb
-	breadcrumb := fmt.Sprintf("← Agente / %s", t.TaskID)
+	// Breadcrumb (2 lines)
+	statusLabel := t.CoordinatorStatus
+	if statusLabel == "" {
+		statusLabel = "—"
+	}
+	breadcrumb := fmt.Sprintf("← Agente / %s  [%s]", t.TaskID, statusLabel)
 	lines = append(lines, " "+ViewActive.Render(breadcrumb))
 	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	lines = append(lines, "")
 
-	// Status badge
-	var statusStr string
-	switch t.CoordinatorStatus {
-	case "completed":
-		statusStr = StatusGreen.Render("✔ completed")
-	case "running":
-		statusStr = StatusYellow.Render("◉ running " + spinFrames[m.spinIdx])
-	case "synthesizing": // legacy schema_version < 2
-		statusStr = SynthesizerStyle.Render("⚡ synthesizing " + spinFrames[m.spinIdx])
-	default:
-		if t.CoordinatorStatus == "" {
-			statusStr = DimText.Render("◌ sin estado")
-		} else {
-			statusStr = DimText.Render("◌ " + t.CoordinatorStatus)
-		}
+	// Office floor
+	floorStr := m.viewOfficeFloor(t)
+	for _, l := range strings.Split(floorStr, "\n") {
+		lines = append(lines, l)
 	}
-	lines = append(lines, "  "+statusStr)
-	lines = append(lines, "")
-
-	// Goal (wrapped)
-	lines = append(lines, "  "+SectionHeader.Render("◎  OBJETIVO"))
-	goalW := m.width - 4
-	if goalW < 20 {
-		goalW = 20
-	}
-	wrapped := ansi.Wrap(t.Goal, goalW, " ")
-	for _, l := range strings.Split(wrapped, "\n") {
-		lines = append(lines, "  "+l)
-	}
-	lines = append(lines, "")
-
-	// Metadata
-	lines = append(lines, "  "+DimText.Render("⏱  CREADO")+"      "+formatTaskDate(t.Created))
-	if t.Workspace != "" {
-		ws := t.Workspace
-		maxWS := m.width - 16
-		if maxWS < 10 {
-			maxWS = 10
-		}
-		if len(ws) > maxWS {
-			ws = "…" + ws[len(ws)-maxWS+1:]
-		}
-		lines = append(lines, "  "+DimText.Render("⏍  WORKSPACE")+"   "+ws)
-	}
-	lines = append(lines, "")
 	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
 
-	// Agents section
-	allAgents := task.AllAgents(t)
-	agentLabel := fmt.Sprintf("⬡  AGENTES  %d", len(t.Agents))
-	if t.SchemaVersion < 2 && t.SynthesizerID != "" {
-		agentLabel += "  " + SynthesizerStyle.Render("⚡ synthesizer")
-	}
-	lines = append(lines, "  "+SectionHeader.Render(agentLabel))
-	lines = append(lines, "")
-
-	const aIDW = 16
-	const aRoleW = 18
-	const aSessW = 20
-
-	if len(allAgents) == 0 {
-		lines = append(lines, "  "+DimText.Render("sin agentes registrados"))
+	// Channel tabs (1 line) + separator
+	channels := listMsgChannels(t.Workspace)
+	activeCh := m.activeMsgChannel
+	if len(channels) > 0 {
+		activeCh = activeCh % len(channels)
 	} else {
-		hdr := fmt.Sprintf("   %-*s  %-*s  %-*s  %s", aIDW, "ID", aRoleW, "ROL", aSessW, "SESIÓN", "ESTADO")
-		lines = append(lines, DimText.Render(hdr))
-
-		agentIdx := m.multiAgentIdx
-		if agentIdx >= len(allAgents) {
-			agentIdx = len(allAgents) - 1
-		}
-
-		for i, a := range allAgents {
-			// Visual separator before synthesizer
-			if a.IsSynthesizer {
-				lines = append(lines, "  "+SepDim.Render(strings.Repeat("─", m.width-4)))
-			}
-
-			agentStatus := task.AgentStatus(t.Workspace, a.ID)
-
-			id := a.ID
-			if len(id) > aIDW {
-				id = id[:aIDW]
-			}
-			role := a.Role
-			if len(role) > aRoleW {
-				role = role[:aRoleW]
-			}
-			sess := a.SessionID
-			if len(sess) > aSessW {
-				sess = sess[:aSessW]
-			}
-			if sess == "" {
-				sess = "—"
-			}
-
-			selected := i == agentIdx
-			selector := "  "
-			if selected {
-				selector = "❯ "
-			}
-
-			var statusRendered string
-			switch agentStatus {
-			case "completed", "done":
-				statusRendered = StatusGreen.Render("✔ " + agentStatus)
-			case "running", "working":
-				statusRendered = StatusYellow.Render("◉ " + agentStatus + " " + spinFrames[m.spinIdx])
-			default:
-				statusRendered = DimText.Render("◌ " + agentStatus)
-			}
-
-			if a.IsSynthesizer {
-				prefix := "⚡ "
-				if selected {
-					line := fmt.Sprintf("%s%s%-*s  %-*s  %-*s  %s", selector, prefix, aIDW, id, aRoleW, role, aSessW, sess, agentStatus)
-					lines = append(lines, SynthesizerSelected.Width(m.width).Render(line))
-				} else {
-					row := fmt.Sprintf("%s%s%-*s  %-*s  %-*s  ", selector, prefix, aIDW, id, aRoleW, role, aSessW, sess)
-					lines = append(lines, SynthesizerStyle.Render(row)+statusRendered)
-				}
-			} else {
-				if selected {
-					line := fmt.Sprintf("%s%-*s  %-*s  %-*s  %s", selector, aIDW, id, aRoleW, role, aSessW, sess, agentStatus)
-					lines = append(lines, TaskRowSelected.Width(m.width).Render(line))
-				} else {
-					row := fmt.Sprintf("%s%-*s  %-*s  %-*s  ", selector, aIDW, id, aRoleW, role, aSessW, sess)
-					lines = append(lines, row+statusRendered)
-				}
-			}
-		}
+		activeCh = 0
 	}
-
-	// Director→Human updates panel
-	updatesFile := t.Workspace + "/messages/director→human.md"
-	if raw, err := os.ReadFile(updatesFile); err == nil && len(raw) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-		lines = append(lines, "  "+SectionHeader.Render("◎  DIRECTOR UPDATES"))
-		lines = append(lines, "")
-		updateW := m.width - 4
-		if updateW < 20 {
-			updateW = 20
-		}
-		updateLines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-		// Show last 6 lines
-		start := len(updateLines) - 6
-		if start < 0 {
-			start = 0
-		}
-		for _, ul := range updateLines[start:] {
-			wrapped := ansi.Wrap(ul, updateW, " ")
-			for _, wl := range strings.Split(wrapped, "\n") {
-				lines = append(lines, "  "+DimText.Render(wl))
-			}
-		}
-	}
-
-	// Fill space before footer
-	for len(lines) < h-footerH {
-		lines = append(lines, "")
-	}
-
+	lines = append(lines, m.viewMsgChannelTabs(channels))
 	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	lines = append(lines, " "+DimText.Render("↑/↓ navegar  Enter ver output  x marcar done  Esc volver  Ctrl+Q salir"))
+
+	// Chat panel fills remaining space (reserve 2 lines: input + footer)
+	usedLines := len(lines)
+	chatH := h - usedLines - 2
+	if chatH < 3 {
+		chatH = 3
+	}
+	var channelFile string
+	if len(channels) > 0 && activeCh < len(channels) {
+		channelFile = channels[activeCh]
+	}
+	chatStr := m.viewChatPanel(t.Workspace, channelFile, chatH)
+	for _, l := range strings.Split(chatStr, "\n") {
+		lines = append(lines, l)
+	}
+
+	// Chat input (1 line) + footer separator
+	lines = append(lines, m.viewChatInput())
+	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
 
 	if len(lines) > h {
 		lines = lines[:h]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// viewOfficeFloor renders an animated grid of agent desks.
+func (m Model) viewOfficeFloor(t task.Task) string {
+	agents := task.AllAgents(t)
+	if len(agents) == 0 {
+		return "  " + DimText.Render("sin agentes registrados") + "\n"
+	}
+
+	const deskW = 24
+	const deskGap = 1
+	desksPerRow := m.width / (deskW + deskGap)
+	if desksPerRow < 1 {
+		desksPerRow = 1
+	}
+
+	var out []string
+	out = append(out, "  "+SectionHeader.Render(fmt.Sprintf("⬡  OFFICE FLOOR  %d agentes", len(agents))))
+
+	for rowStart := 0; rowStart < len(agents); rowStart += desksPerRow {
+		rowEnd := rowStart + desksPerRow
+		if rowEnd > len(agents) {
+			rowEnd = len(agents)
+		}
+		rowAgents := agents[rowStart:rowEnd]
+
+		// Render each desk as a multi-line string
+		deskStrings := make([]string, len(rowAgents))
+		for i, a := range rowAgents {
+			status := task.AgentStatus(t.Workspace, a.ID)
+			isDirector := a.ID == "director" || a.IsSynthesizer
+			var frame string
+			if isDirector {
+				frame = spriteDirector[m.spinIdx%4]
+			} else {
+				frame = agentSpriteFrame(status, m.spinIdx)
+			}
+			deskLines := renderDeskBox(a, status, frame, isDirector, deskW)
+			deskStrings[i] = strings.Join(deskLines, "\n")
+		}
+
+		// Join desks side by side with a gap
+		rowStr := lipgloss.JoinHorizontal(lipgloss.Top, deskStrings...)
+		out = append(out, rowStr)
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// viewMsgChannelTabs renders a navigable tab bar for message channels.
+func (m Model) viewMsgChannelTabs(channels []string) string {
+	if len(channels) == 0 {
+		return "  " + DimText.Render("sin canales de mensajes")
+	}
+
+	active := m.activeMsgChannel % len(channels)
+
+	sep := TabSeparator.Render(" │ ")
+	var parts []string
+	for i, ch := range channels {
+		name := ch
+		if len([]rune(name)) > 28 {
+			name = string([]rune(name)[:27]) + "…"
+		}
+		if i == active {
+			parts = append(parts, ViewActive.Render(name))
+		} else {
+			parts = append(parts, ViewInactive.Render(name))
+		}
+		if i < len(channels)-1 {
+			parts = append(parts, sep)
+		}
+	}
+	return "  " + strings.Join(parts, "")
+}
+
+// viewChatPanel renders the selected channel file as a scrollable chat panel.
+func (m Model) viewChatPanel(workspace, channelFile string, contentH int) string {
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	var allLines []string
+
+	if channelFile == "" {
+		allLines = []string{"  " + DimText.Render("↑ selecciona un canal con Tab")}
+	} else {
+		filePath := workspace + "/messages/" + channelFile
+		raw, err := os.ReadFile(filePath)
+		if err != nil {
+			allLines = []string{"  " + DimText.Render("sin mensajes aún…")}
+		} else {
+			contentWidth := m.width - 2
+			if contentWidth < 1 {
+				contentWidth = 1
+			}
+			for _, l := range strings.Split(string(raw), "\n") {
+				wrapped := ansi.Wrap(l, contentWidth, " ")
+				for _, wl := range strings.Split(wrapped, "\n") {
+					if strings.HasPrefix(strings.TrimSpace(wl), "#") {
+						allLines = append(allLines, " "+SectionHeader.Render(wl))
+					} else if wl == "" {
+						allLines = append(allLines, "")
+					} else {
+						allLines = append(allLines, " "+DimText.Render(wl))
+					}
+				}
+			}
+		}
+	}
+
+	// Scroll: offset 0 = tail, increasing offset scrolls up
+	total := len(allLines)
+	off := m.taskChatScrollOffset
+	start := total - contentH - off
+	if start < 0 {
+		start = 0
+	}
+	end := start + contentH
+	if end > total {
+		end = total
+	}
+
+	visible := make([]string, end-start)
+	copy(visible, allLines[start:end])
+	for len(visible) < contentH {
+		visible = append(visible, "")
+	}
+
+	return strings.Join(visible, "\n")
+}
+
+// viewChatInput renders the chat input bar (focused or hint mode).
+func (m Model) viewChatInput() string {
+	if !m.taskChatFocused {
+		return FooterStyle.Width(m.width).Render("f/i escribir  ←/→ canal  ↑↓ scroll  Enter agente  Esc volver  Ctrl+Q salir")
+	}
+
+	buf := m.taskChatInput
+	cursor := m.taskChatCursorPos
+	if cursor > len(buf) {
+		cursor = len(buf)
+	}
+
+	before := buf[:cursor]
+	var cursorChar, after string
+	if cursor < len(buf) {
+		cursorChar = string(buf[cursor])
+		after = buf[cursor+1:]
+	}
+
+	var rendered string
+	if cursorChar != "" {
+		rendered = before + InputCursor.Render(cursorChar) + after
+	} else {
+		rendered = before + InputCursor.Render(" ")
+	}
+
+	content := InputPrompt.Render("> ") + rendered
+	return InputStyle.Width(m.width).Render(content)
 }
 
 func formatTaskDate(created string) string {

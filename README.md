@@ -136,6 +136,28 @@ go build -o greg-ui .
 ln -s "$(pwd)/greg-ui" ~/.local/bin/greg-ui
 ```
 
+The TUI has two views: **Chat** (`Ctrl+1`) and **Agente** (`Ctrl+2`).
+
+The Agente tab shows task details with animated ASCII tamagotchi sprites per agent:
+
+```
+┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+│       ]=[            │  │      (o_o)            │  │      (-_-)           │
+│      (^o^)           │  │       ⌨▒░             │  │       zzZ            │
+│  director   working  │  │  americas   working   │  │  europe    waiting   │
+└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
+```
+
+Below the desks: navigable message channel tabs and a chat panel for reading/sending messages.
+
+| Key | Action |
+|-----|--------|
+| `←/→` | Switch message channel |
+| `↑/↓` | Scroll chat |
+| `f` or `i` | Focus chat input |
+| `Enter` | Send message (in input) / View agent output (in nav) |
+| `Esc` | Cancel input / Go back |
+
 ### Skills
 
 greg injects prompt templates (skills) into each agent to define their behavior:
