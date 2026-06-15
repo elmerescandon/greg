@@ -282,7 +282,7 @@ func (m Model) viewGraficas() string {
 			colorLow = "#2a1a00"
 			colorHigh = colorAmber
 		}
-		img := DrawHourlyChart(hourDistF, 1200, hourlyChartRows*22, colorLow, colorHigh)
+		img := DrawHourlyChart(hourDistF, 480, hourlyChartRows*18, colorLow, colorHigh)
 		for _, l := range kittyImageBlock(img, hourlyChartRows, w) {
 			lines = append(lines, l)
 		}
@@ -312,7 +312,7 @@ func (m Model) viewGraficas() string {
 			colorLow = "#2a1a00"
 			colorHigh = colorAmber
 		}
-		img := DrawDailyChart(dailyVals, 1200, dailyChartRows*22, colorLow, colorHigh)
+		img := DrawDailyChart(dailyVals, 480, dailyChartRows*18, colorLow, colorHigh)
 		for _, l := range kittyImageBlock(img, dailyChartRows, w) {
 			lines = append(lines, l)
 		}

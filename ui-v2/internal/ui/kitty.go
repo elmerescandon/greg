@@ -50,19 +50,28 @@ func kittyInlineImage(img image.Image, rows, cols int) string {
 }
 
 // kittyImageBlock returns the view-string lines for a kitty image.
-// Line 0 contains the escape sequence; lines 1..rows-1 are background-colored
-// spaces that "reserve" the terminal rows the image occupies.
-// Because Ghostty composites images above the character layer, writing
-// background-colored spaces to those rows does not visually cover the image.
+//
+// Strategy: put the kitty sequence on the LAST line of the block, prefixed
+// with a cursor-up of (rows-1) rows. bubbletea renders lines top-to-bottom
+// using absolute cursor positioning:
+//   1. Lines 0..rows-2 (empty): bubbletea clears those rows.
+//   2. Line rows-1: bubbletea writes "\033[rows-1A" + kittySeq.
+//      - cursor-up moves to the top of the block.
+//      - kittySeq renders the image (rows tall), advancing cursor to rows-1+1.
+//      - bubbletea's internal cursor also lands at the same row. ✓
+//
+// On subsequent ticks, none of these lines change → bubbletea skips them
+// entirely → the image persists without flicker.
 func kittyImageBlock(img image.Image, rows, cols int) []string {
 	seq := kittyInlineImage(img, rows, cols)
-	filler := strings.Repeat(" ", cols)
+	// cursor-up by (rows-1) so the image renders starting at the top of the block
+	upMove := fmt.Sprintf("\033[%dA", rows-1)
 
 	lines := make([]string, rows)
-	lines[0] = seq // image sequence; terminal renders image here
-	for i := 1; i < rows; i++ {
-		lines[i] = filler // reserved height; image composited above
+	for i := 0; i < rows-1; i++ {
+		lines[i] = "" // cleared by bubbletea before the image renders
 	}
+	lines[rows-1] = upMove + seq
 	return lines
 }
 
