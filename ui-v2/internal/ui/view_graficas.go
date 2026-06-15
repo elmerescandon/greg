@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -11,121 +10,191 @@ import (
 	"github.com/elmerescandon/greg-ui/internal/session"
 )
 
-// ── braille chart (fallback) ──────────────────────────────────────────────────
+// ── heatmap colors ────────────────────────────────────────────────────────────
 
-// brailleDots maps (col, row) → braille bit position.
-// Each braille char covers 2 columns × 4 rows.
-var brailleBit = [2][4]byte{
-	{0x01, 0x02, 0x04, 0x40}, // col 0
-	{0x08, 0x10, 0x20, 0x80}, // col 1
+var heatSessionColors = []string{
+	colorBorder,  // 0: no activity
+	"#0e4429",    // 1: low
+	"#006d32",    // 2: medium-low
+	"#26a641",    // 3: medium-high
+	colorGreen,   // 4: high (#3ddc84)
 }
 
-func renderBrailleChart(values []float64, width, height int, colorLow, colorHigh string) []string {
-	n := len(values)
-	if n == 0 || width == 0 || height == 0 {
-		return nil
+var heatCostColors = []string{
+	colorBorder,
+	"#2a1500",
+	"#5c3600",
+	"#b36b00",
+	colorAmber, // #f5a32a
+}
+
+func heatLevel(val, maxVal float64) int {
+	if val <= 0 || maxVal <= 0 {
+		return 0
+	}
+	t := val / maxVal
+	switch {
+	case t > 0.75:
+		return 4
+	case t > 0.5:
+		return 3
+	case t > 0.25:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// ── heatmap renderer ──────────────────────────────────────────────────────────
+
+var dayLabels = []string{"Lun", "   ", "Mié", "   ", "Vie", "   ", "Dom"}
+
+func renderHeatmap(dayData map[string]float64, numWeeks int, useCost bool) []string {
+	colors := heatSessionColors
+	if useCost {
+		colors = heatCostColors
+	}
+
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	// Find the Sunday that ends the current week (or today if Sunday)
+	endDay := today
+	for endDay.Weekday() != time.Sunday {
+		endDay = endDay.AddDate(0, 0, 1)
+	}
+	// Start from (numWeeks-1) weeks before that Monday
+	startDay := endDay.AddDate(0, 0, -(numWeeks*7 - 1))
+	// Align to Monday
+	for startDay.Weekday() != time.Monday {
+		startDay = startDay.AddDate(0, 0, -1)
+	}
+
+	// Find max value for scaling
+	maxVal := 0.0
+	for _, v := range dayData {
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+
+	// Build grid: 7 rows (Mon=0 .. Sun=6) × numWeeks columns
+	grid := make([][]int, 7)
+	for i := range grid {
+		grid[i] = make([]int, numWeeks)
+	}
+	dates := make([][]string, 7)
+	for i := range dates {
+		dates[i] = make([]string, numWeeks)
+	}
+
+	d := startDay
+	for week := 0; week < numWeeks; week++ {
+		for dow := 0; dow < 7; dow++ {
+			key := d.Format("2006-01-02")
+			dates[dow][week] = key
+			if d.After(today) {
+				grid[dow][week] = -1 // future: render as empty
+			} else {
+				grid[dow][week] = heatLevel(dayData[key], maxVal)
+			}
+			d = d.AddDate(0, 0, 1)
+		}
+	}
+
+	// Month labels row
+	const labelW = 5
+	var monthRow strings.Builder
+	monthRow.WriteString(strings.Repeat(" ", labelW))
+	prevMonth := ""
+	for week := 0; week < numWeeks; week++ {
+		// Use the Monday of this week to determine the month label
+		monDate := startDay.AddDate(0, 0, week*7)
+		m := monDate.Format("Jan")
+		if m != prevMonth {
+			monthRow.WriteString(DimText.Render(m))
+			prevMonth = m
+			// pad to align next column (month label is 3 chars, cell is 2)
+			if week < numWeeks-1 {
+				// nothing extra needed — next iteration adds cell width
+			}
+		} else {
+			monthRow.WriteString("  ")
+		}
+	}
+
+	var lines []string
+	lines = append(lines, monthRow.String())
+
+	// Grid rows
+	for dow := 0; dow < 7; dow++ {
+		var row strings.Builder
+		label := dayLabels[dow]
+		row.WriteString(DimText.Render(fmt.Sprintf(" %-3s ", label)))
+		for week := 0; week < numWeeks; week++ {
+			level := grid[dow][week]
+			if level < 0 {
+				row.WriteString(DimText.Render("░ "))
+			} else {
+				c := colors[level]
+				row.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("█ "))
+			}
+		}
+		lines = append(lines, row.String())
+	}
+
+	return lines
+}
+
+// ── legend ────────────────────────────────────────────────────────────────────
+
+func renderHeatLegend(useCost bool) string {
+	colors := heatSessionColors
+	if useCost {
+		colors = heatCostColors
+	}
+	var sb strings.Builder
+	sb.WriteString(DimText.Render("  menos "))
+	for _, c := range colors {
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("█ "))
+	}
+	sb.WriteString(DimText.Render("más"))
+	return sb.String()
+}
+
+// ── hourly heatmap (single row, 24 columns) ──────────────────────────────────
+
+func renderHourlyStrip(dist [24]float64, useCost bool) []string {
+	colors := heatSessionColors
+	if useCost {
+		colors = heatCostColors
 	}
 	maxV := 0.0
-	for _, v := range values {
+	for _, v := range dist {
 		if v > maxV {
 			maxV = v
 		}
 	}
-	if maxV == 0 {
-		maxV = 1
-	}
 
-	// Braille canvas: pixW = width*2, pixH = height*4
-	pixW := width * 2
-	pixH := height * 4
-	canvas := make([][]bool, pixH)
-	for i := range canvas {
-		canvas[i] = make([]bool, pixW)
-	}
-
-	// Map each value to a bar
-	barPixW := float64(pixW) / float64(n)
-	for i, v := range values {
-		t := v / maxV
-		barH := int(math.Round(t * float64(pixH)))
-		x0 := int(float64(i) * barPixW)
-		x1 := int(float64(i+1)*barPixW) - 1
-		if x1 >= pixW {
-			x1 = pixW - 1
-		}
-		for y := pixH - barH; y < pixH; y++ {
-			for x := x0; x <= x1; x++ {
-				canvas[y][x] = true
-			}
+	// Hour labels
+	var labelRow strings.Builder
+	labelRow.WriteString("       ")
+	for h := 0; h < 24; h++ {
+		if h%2 == 0 {
+			labelRow.WriteString(DimText.Render(fmt.Sprintf("%-3d", h)))
 		}
 	}
 
-	rows := make([]string, height)
-	for row := 0; row < height; row++ {
-		var sb strings.Builder
-		for col := 0; col < width; col++ {
-			var bits byte
-			for dc := 0; dc < 2; dc++ {
-				for dr := 0; dr < 4; dr++ {
-					py := row*4 + dr
-					px := col*2 + dc
-					if py < pixH && px < pixW && canvas[py][px] {
-						bits |= brailleBit[dc][dr]
-					}
-				}
-			}
-			// Fraction of this cell that's filled → pick color
-			filled := 0
-			for dc := 0; dc < 2; dc++ {
-				for dr := 0; dr < 4; dr++ {
-					py := row*4 + dr
-					px := col*2 + dc
-					if py < pixH && px < pixW && canvas[py][px] {
-						filled++
-					}
-				}
-			}
-			t := float64(filled) / 8.0
-			var colorStr string
-			if t > 0.6 {
-				colorStr = colorHigh
-			} else if t > 0.2 {
-				colorStr = colorCyan
-			} else {
-				colorStr = colorLow
-			}
-			ch := rune(0x2800 + int(bits))
-			if bits == 0 {
-				sb.WriteString(DimText.Render(string(ch)))
-			} else {
-				sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorStr)).Render(string(ch)))
-			}
-		}
-		rows[row] = sb.String()
+	// Heat strip
+	var strip strings.Builder
+	strip.WriteString(DimText.Render("       "))
+	for h := 0; h < 24; h++ {
+		level := heatLevel(dist[h], maxV)
+		c := colors[level]
+		strip.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("██ "))
 	}
-	return rows
-}
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func hourlyToFloat(dist [24]int) [24]float64 {
-	var out [24]float64
-	for i, v := range dist {
-		out[i] = float64(v)
-	}
-	return out
-}
-
-func dailyToFloat(stats []metrics.DayStat, useCost bool) []float64 {
-	out := make([]float64, len(stats))
-	for i, s := range stats {
-		if useCost {
-			out[i] = s.Cost
-		} else {
-			out[i] = float64(s.Sessions)
-		}
-	}
-	return out
+	return []string{labelRow.String(), strip.String()}
 }
 
 // ── summary cards ─────────────────────────────────────────────────────────────
@@ -176,79 +245,15 @@ func renderSummaryCards(sum metrics.Summary, width int) string {
 		rendered[0], "  ", rendered[1], "  ", rendered[2])
 }
 
-// ── axis labels ───────────────────────────────────────────────────────────────
-
-func renderHourLabels(width int) string {
-	// 24 labels spread evenly across width
-	labels := []string{"00", "02", "04", "06", "08", "10", "12",
-		"14", "16", "18", "20", "22"}
-	n := len(labels)
-	spacing := width / n
-	if spacing < 2 {
-		spacing = 2
-	}
-	var sb strings.Builder
-	for i, l := range labels {
-		if i > 0 {
-			pad := spacing - 2
-			if pad < 1 {
-				pad = 1
-			}
-			sb.WriteString(strings.Repeat(" ", pad))
-		}
-		sb.WriteString(DimText.Render(l))
-	}
-	return sb.String()
-}
-
-func renderDayLabels(stats []metrics.DayStat, width int) string {
-	if len(stats) == 0 {
-		return ""
-	}
-	first := formatShortDate(stats[0].Date)
-	last := formatShortDate(stats[len(stats)-1].Date)
-	pad := width - len(first) - len(last)
-	if pad < 1 {
-		pad = 1
-	}
-	return DimText.Render(first) + strings.Repeat(" ", pad) + DimText.Render(last)
-}
-
-func formatShortDate(d string) string {
-	t, err := time.Parse("2006-01-02", d)
-	if err != nil {
-		return d
-	}
-	return t.Format("Jan 02")
-}
-
-// ── subview toggle ────────────────────────────────────────────────────────────
-
-// metricsShowCost is toggled by pressing 'c' / 's' in the Métricas view.
-// It's stored on the Model, not here; but we accept it as a param.
-
 // ── main view ─────────────────────────────────────────────────────────────────
 
-const (
-	hourlyChartRows = 9  // terminal rows for the hourly chart
-	dailyChartRows  = 5  // terminal rows for the daily chart
-	dailyDays       = 30
-)
+const dailyDays = 30
 
 func (m Model) viewGraficas() string {
 	allSess := metrics.AllSessions()
 	sum := metrics.GetSummary(allSess)
-	hourDist := metrics.HourlyDist(allSess)
-	var hourDistF [24]float64
-	if m.metricsShowCost {
-		hourDistF = metrics.HourlyCostDist(allSess)
-	} else {
-		hourDistF = hourlyToFloat(hourDist)
-	}
-	dailyStats := metrics.DailyStats(allSess, dailyDays)
-	dailyVals := dailyToFloat(dailyStats, m.metricsShowCost)
 
-	h := m.height - 2 // content height (minus 2-row top bar)
+	h := m.height - 2
 	w := m.width
 
 	var lines []string
@@ -258,63 +263,67 @@ func (m Model) viewGraficas() string {
 	lines = append(lines, " "+renderSummaryCards(sum, w-2))
 	lines = append(lines, "")
 
-	// ── Toggle hint + section header ───────────────────────────────────────
+	// ── Toggle hint ────────────────────────────────────────────────────────
 	toggleHint := "[s] sesiones  [c] costo"
 	if m.metricsShowCost {
 		toggleHint = "[s] sesiones  " + ViewActive.Render("[c] costo")
 	} else {
 		toggleHint = ViewActive.Render("[s] sesiones") + "  [c] costo"
 	}
-	hdrLeft := SectionHeader.Render("  Actividad por hora")
+
+	// ── Activity heatmap ───────────────────────────────────────────────────
+	hdrLeft := SectionHeader.Render("  Actividad")
 	hintPad := w - lipgloss.Width(hdrLeft) - lipgloss.Width(toggleHint) - 2
 	if hintPad < 1 {
 		hintPad = 1
 	}
 	lines = append(lines, hdrLeft+strings.Repeat(" ", hintPad)+DimText.Render(toggleHint))
-
-	// ── Hourly chart ───────────────────────────────────────────────────────
-	lines = append(lines, " "+renderHourLabels(w-2))
-
-	if IsKittySupported() && m.kittyReady {
-		for _, l := range kittyPlaceholderLines(kittyImgHourly, hourlyChartRows, w) {
-			lines = append(lines, l)
-		}
-	} else {
-		colorLow := colorBorder
-		colorHigh := colorCyan
-		if m.metricsShowCost {
-			colorLow = "#2a1a00"
-			colorHigh = colorAmber
-		}
-		chartLines := renderBrailleChart(hourDistF[:], w-2, hourlyChartRows, colorLow, colorHigh)
-		for _, l := range chartLines {
-			lines = append(lines, " "+l)
-		}
-	}
-
 	lines = append(lines, "")
 
-	// ── Daily chart ────────────────────────────────────────────────────────
-	lines = append(lines, SectionHeader.Render("  Actividad diaria  ")+
-		DimText.Render(fmt.Sprintf("últimos %d días", dailyDays)))
-
-	if IsKittySupported() && m.kittyReady {
-		for _, l := range kittyPlaceholderLines(kittyImgDaily, dailyChartRows, w) {
-			lines = append(lines, l)
+	// Build day→value map
+	dayData := make(map[string]float64)
+	for _, s := range allSess {
+		if len(s.Started) < 10 {
+			continue
 		}
-	} else {
-		colorLow := "#0a1f14"
-		colorHigh := colorGreen
+		key := s.Started[:10]
 		if m.metricsShowCost {
-			colorLow = "#2a1a00"
-			colorHigh = colorAmber
-		}
-		chartLines := renderBrailleChart(dailyVals, w-2, dailyChartRows, colorLow, colorHigh)
-		for _, l := range chartLines {
-			lines = append(lines, " "+l)
+			dayData[key] += s.CostUSD
+		} else {
+			dayData[key]++
 		}
 	}
-	lines = append(lines, " "+renderDayLabels(dailyStats, w-2))
+
+	// Dynamic number of weeks based on terminal width (each cell = 2 chars, labels = 5)
+	numWeeks := (w - 5) / 2
+	if numWeeks > 52 {
+		numWeeks = 52
+	}
+	if numWeeks < 4 {
+		numWeeks = 4
+	}
+
+	heatLines := renderHeatmap(dayData, numWeeks, m.metricsShowCost)
+	lines = append(lines, heatLines...)
+	lines = append(lines, renderHeatLegend(m.metricsShowCost))
+	lines = append(lines, "")
+
+	// ── Hourly distribution ────────────────────────────────────────────────
+	lines = append(lines, SectionHeader.Render("  Horas de actividad"))
+	lines = append(lines, "")
+
+	var hourDist [24]float64
+	if m.metricsShowCost {
+		hourDist = metrics.HourlyCostDist(allSess)
+	} else {
+		dist := metrics.HourlyDist(allSess)
+		for i, v := range dist {
+			hourDist[i] = float64(v)
+		}
+	}
+	for _, l := range renderHourlyStrip(hourDist, m.metricsShowCost) {
+		lines = append(lines, l)
+	}
 	lines = append(lines, "")
 
 	// ── Session breakdown table ────────────────────────────────────────────
@@ -339,7 +348,6 @@ func (m Model) viewGraficas() string {
 
 // renderSessionsTable shows top sessions by cost.
 func (m Model) renderSessionsTable(sessions []session.Session, width int) []string {
-	// Filter to sessions with cost data, sort descending
 	type entry struct {
 		id      string
 		started string
@@ -357,7 +365,6 @@ func (m Model) renderSessionsTable(sessions []session.Session, width int) []stri
 			})
 		}
 	}
-	// Simple insertion sort (small slice)
 	for i := 1; i < len(entries); i++ {
 		for j := i; j > 0 && entries[j].cost > entries[j-1].cost; j-- {
 			entries[j], entries[j-1] = entries[j-1], entries[j]

@@ -98,6 +98,71 @@ func DailyStats(sessions []session.Session, days int) []DayStat {
 	return result
 }
 
+type HeatmapCell struct {
+	Date     string
+	Weekday  int // 0=Sun, 1=Mon, ... 6=Sat
+	Sessions int
+	Cost     float64
+}
+
+// HeatmapData returns cells for the last `weeks` weeks, aligned to week boundaries.
+// Result is organized column-major: [week][weekday].
+func HeatmapData(sessions []session.Session, weeks int) ([][]HeatmapCell, float64, int) {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	// End at today, start at the beginning of (weeks-1) weeks ago
+	endDay := today
+	startDay := endDay.AddDate(0, 0, -(weeks*7 - 1))
+	// Align startDay to Sunday (start of week in GitHub style)
+	for startDay.Weekday() != time.Sunday {
+		startDay = startDay.AddDate(0, 0, -1)
+	}
+
+	// Build day map
+	byDay := map[string]*HeatmapCell{}
+	for _, s := range sessions {
+		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
+		if err != nil {
+			continue
+		}
+		key := t.Format("2006-01-02")
+		if byDay[key] == nil {
+			byDay[key] = &HeatmapCell{Date: key, Weekday: int(t.Weekday())}
+		}
+		byDay[key].Sessions++
+		byDay[key].Cost += s.CostUSD
+	}
+
+	// Build grid
+	var grid [][]HeatmapCell
+	var maxSessions int
+	var maxCost float64
+	d := startDay
+	for d.Before(endDay) || d.Equal(endDay) {
+		col := []HeatmapCell{}
+		for wd := 0; wd < 7; wd++ {
+			key := d.Format("2006-01-02")
+			if cell, ok := byDay[key]; ok {
+				cell.Weekday = wd
+				col = append(col, *cell)
+				if cell.Sessions > maxSessions {
+					maxSessions = cell.Sessions
+				}
+				if cell.Cost > maxCost {
+					maxCost = cell.Cost
+				}
+			} else {
+				col = append(col, HeatmapCell{Date: key, Weekday: wd})
+			}
+			d = d.AddDate(0, 0, 1)
+		}
+		grid = append(grid, col)
+	}
+
+	return grid, maxCost, maxSessions
+}
+
 func GetSummary(sessions []session.Session) Summary {
 	var s Summary
 	now := time.Now()
