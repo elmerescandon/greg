@@ -1,189 +1,152 @@
 # greg
 
-Multi-agent Claude Code manager with a terminal UI.
+Orchestrate teams of Claude Code agents that collaborate in parallel.
 
-## What it is
+## The problem
 
-**greg CLI** — spawn, message, and schedule Claude Code sessions from the terminal.  
-**greg UI** — a 3-pane terminal workspace: session history | claude panel | shell.
+A single Claude Code session hits its limits fast on big tasks — research reports, codebase audits, multi-file migrations. You run out of context, wait too long, or end up copy-pasting outputs between sessions manually. That doesn't scale.
 
-```
-┌──────────────┬──────────────────────────────────────────────┬──────────┐
-│   sessions   │  main  │  task-1 ●                           │ terminal │
-│              │  ⠿ claude  a1b2c3  $0.042  ctx:68% · 136k/200k│          │
-│  ACTIVAS     ├──────────────────────────────────────────────┤          │
-│  ● a1b2c3    │                                              │          │
-│  ● task-1    │  output scrollable...                        │          │
-│              │                                              │          │
-│  MÉTRICAS    │                                              │          │
-│  12k tokens  │                                              │          │
-│  $0.04/mes   ├──────────────────────────────────────────────┤          │
-│              │  > your message here_                        │          │
-│  HISTORIAL   ├──────────────────────────────────────────────┤          │
-│  ○ finished  │  Enter  Alt+Enter  Ctrl+K  Ctrl+W  Ctrl+Q   │          │
-└──────────────┴──────────────────────────────────────────────┴──────────┘
-```
+## How greg solves it
 
-## Requirements
+greg spawns multiple Claude Code agents that work **in parallel** on a shared workspace. Each agent owns a perspective, writes progressively, and can read what the others are producing in real time.
 
-- [Claude Code](https://docs.anthropic.com/claude-code) (`claude` in PATH)
-- tmux
-- Node.js 18+
-- jq
+- **Parallel agents** — split a task across specialists that run simultaneously, each in its own tmux session
+- **Shared workspace** — agents read and reference each other's outputs as they write; no copy-paste, no handoffs
+- **Automatic director** — a coordinator agent is injected into every task to monitor progress, unblock teammates, and produce synthesis notes
+- **Monitor without interrupting** — `greg peek` shows you what any agent (or all agents in a task) is doing right now, without attaching to their session
+- **Fault tolerant** — if an agent's session crashes before writing `done`, the coordinator detects it and auto-completes after 120 seconds
+- **Terminal-native** — bash CLI + Go TUI, no external services, no API keys beyond Claude Code itself
 
-## Setup
-
-### 1. Set your working directory
-
-Add to your `~/.zshrc` or `~/.bashrc`:
+## Quick start
 
 ```bash
-export GREG_VAULT="/path/to/your/project"
+# Launch a 3-agent research task
+greg task run \
+  --goal "Research report on the state of AI regulation worldwide" \
+  --agent "americas:Cover US, Canada, Brazil, and LATAM regulations. Skip Europe and Asia." \
+  --agent "europe:Cover EU AI Act, UK, and European national frameworks. Skip other regions." \
+  --agent "asia:Cover China, Japan, South Korea, India, and Singapore. Skip other regions."
+
+# A director agent is added automatically to coordinate the team.
+# All 4 agents start working in parallel immediately.
+
+# Check what they're doing
+greg peek mtask-xxxxxxxx
+
+# ━━━ director (greg-a1b2c3d4) ━━━
+# ⏺ Reading americas output... cross-referencing with europe findings on
+#   bilateral AI safety agreements.
+# ✻ Brewed for 3m 12s
+#
+# ━━━ americas (greg-e5f6a7b8) ━━━
+# ⏺ Writing section on Brazil's AI regulatory framework...
+# ✻ Crunched for 4m 5s
+# ...
+
+# When all agents finish, the director leaves synthesis notes:
+cat ~/.greg/multi-tasks/mtask-xxxxxxxx/workspace/director-synthesis-notes.md
 ```
 
-This is the directory Claude Code will work in by default.
+## CLI reference
 
-### 2. Install the CLI
+### Sessions
 
 ```bash
-# Clone the repo
-git clone https://github.com/elmerescandon/greg
-cd greg
-
-# Add CLI to PATH
-ln -s "$(pwd)/cli/greg" /usr/local/bin/greg
-
-# Install UI dependencies
-cd ui && npm install
-```
-
-### 3. Add the UI alias
-
-```bash
-echo 'alias greg-ui="bash /path/to/greg/ui/greg-ui.sh"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-### 4. Configure Ghostty navigation (optional)
-
-Add to `~/.config/ghostty/config`:
-
-```
-macos-option-as-alt = true
-keybind = ctrl+super+left=text:\x02\x1b[D
-keybind = ctrl+super+right=text:\x02\x1b[C
-keybind = ctrl+super+up=text:\x02\x1b[A
-keybind = ctrl+super+down=text:\x02\x1b[B
-```
-
-## Usage
-
-### CLI
-
-```bash
-greg spawn                          # new Claude Code session in $GREG_VAULT
-greg spawn --name "my-task" --prompt "refactor the auth module"
-greg list                           # list active sessions and scheduled tasks
-greg attach greg-xxxxxxxx           # attach to a session
-greg send --to greg-xxxxxxxx "add error handling"
-greg kill greg-xxxxxxxx             # stop and archive session
-greg schedule --prompt "run tests" --at "2026-01-15 09:00"
+greg spawn                                          # new session in $GREG_VAULT
+greg spawn --name "refactor" --prompt "refactor auth module"
+greg list                                           # sessions, tasks, and recent history
+greg peek <session-id> [-n 50]                      # last N lines from a session (default 30)
+greg attach <session-id>                            # attach to tmux session
+greg send --to <session-id> "add error handling"    # send a message
+greg kill <session-id>                              # stop and archive
+greg resume <session-id>                            # resume a finished session
+greg history [--limit N]                            # show last N finished sessions
+greg schedule --prompt "..." --at "2026-07-01 09:00"  # one-shot scheduled task
+greg cancel <task-id>                               # cancel a scheduled task
 ```
 
 ### Multi-agent tasks
 
-Launch a team of parallel agents that collaborate via a shared workspace:
-
 ```bash
-greg task run \
-  --goal "Research report on LLMs in 2026" \
-  --agent "models:Analyze benchmarks and model capabilities" \
-  --agent "research:Analyze academic research trends" \
-  --agent "industry:Analyze industry adoption and use cases"
-
-greg task list                         # show all tasks with agent statuses grouped
-greg task status mtask-xxxxxxxx        # detailed status: agents, coordinator, sessions
-greg task recover mtask-xxxxxxxx       # unblock a task if an agent crashed mid-work
-greg task revise mtask-xxxxxxxx \
-  --agent greg-xxxxxxxx \
-  --message "Go deeper on section 3"  # resume a finished agent with feedback
+greg task run --goal "..." --agent "id:role" [--agent ...]
+greg task status <task-id>                # per-agent status, coordinator health, tmux state
+greg task list                            # all tasks with statuses
+greg peek <task-id> [-n 30]               # tail all agents at once
+greg task message <task-id> "redirect X"  # send a message to the director
+greg task done <task-id> <agent-id>       # force-mark an agent as done
+greg task close <task-id>                 # close task (requires all agents done)
+greg task resume <task-id> <agent-id>     # resume a finished agent with full context
 ```
 
-**How it works:**
+## How multi-agent tasks work
 
-1. A **director** agent is auto-added to coordinate the team
-2. All agents run in parallel, each in its own tmux session
-3. Agents write to `~/.greg/multi-tasks/<task-id>/workspace/<agent>.md` progressively
-4. Agents can message each other via `messages/<from>→<to>.md`
-5. A background **coordinator** polls status files every 15s
-6. When all agents write `done`, the coordinator spawns a **synthesizer** that produces `final-output.md`
-
-**Resilience:** If an agent's session crashes before writing `done`, the coordinator detects this and auto-recovers after 120 seconds. Use `greg task recover` to force immediate recovery.
-
-**Revising results:** Once a task is complete, find the agent's session ID with `greg task status <task-id>`, then resume it:
-
-```bash
-greg task status mtask-xxxxxxxx
-# shows each agent's greg session ID (e.g. greg-a1b2c3)
-
-greg task revise mtask-xxxxxxxx \
-  --agent greg-a1b2c3 \
-  --message "Go deeper on the Gemini benchmarks section."
+```
+~/.greg/multi-tasks/mtask-xxxxxxxx/
+  manifest.json                    # task metadata, agent roles, session IDs
+  workspace/
+    director.md                    # director's coordination log
+    director-synthesis-notes.md    # final consolidated output
+    americas.md                    # each agent writes here progressively
+    europe.md
+    asia.md
+  messages/
+    americas→director.md           # agents message each other
+    director→americas.md
+  status/
+    director.status                # working | waiting | needs-help | done
+    americas.status
+    ...
 ```
 
-The agent resumes with full Claude conversation context and receives the message automatically. When done, it invokes `/greg-revise` inside its session to close and archive itself cleanly.
+1. `greg task run` spawns all agents in parallel, each in its own tmux session
+2. A **director** agent is auto-injected to coordinate, cross-pollinate, and synthesize
+3. Agents write to `workspace/<agent-id>.md` progressively — teammates can read in real time
+4. Agents communicate via `messages/<from>→<to>.md` when they need to coordinate
+5. A background **coordinator** process polls `status/` files every 15 seconds
+6. When all agents (including the director) write `done`, the coordinator closes the task
+
+## Setup
+
+### Requirements
+
+- [Claude Code](https://docs.anthropic.com/claude-code) (`claude` in PATH)
+- tmux
+- Go 1.26+ (for the TUI)
+- jq
+
+### Install
+
+```bash
+git clone https://github.com/elmerescandon/greg
+cd greg
+
+# Add CLI to PATH
+ln -s "$(pwd)/cli/greg" ~/.local/bin/greg
+
+# Set your default working directory
+echo 'export GREG_VAULT="/path/to/your/project"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### TUI (optional)
+
+```bash
+cd ui-v2
+go build -o greg-ui .
+ln -s "$(pwd)/greg-ui" ~/.local/bin/greg-ui
+```
 
 ### Skills
 
+greg injects prompt templates (skills) into each agent to define their behavior:
+
 | Skill | Purpose |
 |-------|---------|
-| `greg-mailbox.md` | Workspace/messaging protocol — injected into every agent |
-| `greg-director.md` | Director agent: coordinate team, cross-pollinate, trigger synthesis |
-| `greg-teammate.md` | Specialist agent: progressive writing, proactive reading, status protocol |
-| `greg-task` | `/greg-task` — design and launch a multi-agent task interactively |
-| `greg-revise` | `/greg-revise` — close a revision session and archive it cleanly |
-| `greg-learn` | `/greg-learn` — consolidate learnings into persistent memory |
-
-### UI
-
-```bash
-greg-ui
-```
-
-#### Claude panel
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Alt+Enter` | New line in input |
-| `↑ / ↓` | Navigate input history |
-| `← / →` | Move cursor in input |
-| `Home / End` | Jump to start/end of input |
-| `PgUp / PgDn` | Scroll output (big jump) |
-| `Ctrl+↑ / Ctrl+↓` | Scroll output (line by line) |
-| `Ctrl+K` | Pre-fill `/compact ` for guided context compaction |
-| `Ctrl+Shift+←/→` | Switch tabs |
-| `Ctrl+T` | New tab (new Greg session) |
-| `Ctrl+W` | Close current tab |
-| `Ctrl+C` | Cancel running request |
-| `Ctrl+Q` | Quit panel |
-
-#### Sessions panel
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Open session in claude panel |
-| `n` | New Greg session |
-| `x` | Close selected session |
-| `j / k` | Navigate list |
-
-## How it works
-
-- Sessions are stored in `~/.greg/sessions.json`
-- Finished sessions move to `~/.greg/history.json` with their `claude_session_id`
-- The UI reuses conversation context via `claude -p --resume <session_id>`
-- Each session gets a mailbox at `~/.greg/mailbox/<id>/inbox.md`
-- Token usage and cost are tracked per session and aggregated monthly in the metrics section
+| `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent |
+| `greg-director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
+| `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
+| `greg-task` | `/greg-task` — interactive skill to design and launch a multi-agent task |
+| `greg-learn` | `/greg-learn` — consolidate learnings from a conversation into persistent memory |
 
 ## Changelog
 
