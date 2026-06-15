@@ -60,6 +60,7 @@ _spawn_agent() {
   local name="$2"
   local workspace="$3"
   local prompt="$4"
+  local model_id="${5:-}"
 
   mkdir -p "${MAILBOX_DIR}/${session_id}"
   touch "${MAILBOX_DIR}/${session_id}/inbox.md"
@@ -82,9 +83,12 @@ _spawn_agent() {
   local prompt_file; prompt_file=$(mktemp /tmp/greg-prompt-XXXXXX)
   printf '[%s]\n%s' "$capture_id" "$prompt" > "$prompt_file"
 
+  local model_flag=""
+  [[ -n "$model_id" ]] && model_flag="--model ${model_id}"
+
   tmux new-session -d -s "${session_id}" \
     -e "GREG_SESSION_ID=${session_id}" \
-    "cd '${workspace}' && { printf '\\n'; cat '${prompt_file}'; } | claude ${CLAUDE_FLAGS}; rm -f '${prompt_file}'"
+    "cd '${workspace}' && { printf '\\n'; cat '${prompt_file}'; } | claude ${CLAUDE_FLAGS} ${model_flag}; rm -f '${prompt_file}'"
 
   # Answer the trust prompt (reads from /dev/tty, not stdin — must use tmux send-keys)
   (sleep 8 && tmux send-keys -t "${session_id}" "" Enter 2>/dev/null) &
@@ -242,18 +246,30 @@ _claude_session_id_for_dir() {
   fi
 }
 
+_resolve_model() {
+  local alias_or_id="$1"
+  case "$alias_or_id" in
+    opus)   echo "claude-opus-4-8" ;;
+    sonnet) echo "claude-sonnet-4-6" ;;
+    haiku)  echo "claude-haiku-4-5-20251001" ;;
+    *)      echo "$alias_or_id" ;;
+  esac
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 cmd_spawn() {
   local dir="${DEFAULT_DIR}"
   local name=""
   local prompt=""
+  local model_id=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --dir|-d)    dir="$2";    shift 2 ;;
-      --name|-n)   name="$2";   shift 2 ;;
-      --prompt|-p) prompt="$2"; shift 2 ;;
+      --dir|-d)    dir="$2";                            shift 2 ;;
+      --name|-n)   name="$2";                           shift 2 ;;
+      --prompt|-p) prompt="$2";                         shift 2 ;;
+      --model|-m)  model_id="$(_resolve_model "$2")";  shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
   done
@@ -282,10 +298,13 @@ cmd_spawn() {
   local tmp; tmp=$(mktemp)
   jq ". += [$entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
 
+  local model_flag=""
+  [[ -n "$model_id" ]] && model_flag="--model ${model_id}"
+
   # Start tmux session with GREG_SESSION_ID injected
   tmux new-session -d -s "${session_id}" \
     -e "GREG_SESSION_ID=${session_id}" \
-    "cd '${dir}' && claude ${CLAUDE_FLAGS}"
+    "cd '${dir}' && claude ${CLAUDE_FLAGS} ${model_flag}"
 
   # Inject initial prompt after claude loads
   if [[ -n "$prompt" ]]; then
@@ -652,13 +671,17 @@ EOF
 _task_run() {
   local goal=""
   local dir="${DEFAULT_DIR}"
+  local preset=""
+  local model_id=""
   local -a agent_specs=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --goal|-g)  goal="$2";              shift 2 ;;
-      --agent|-a) agent_specs+=("$2");    shift 2 ;;
-      --dir|-d)   dir="$2";              shift 2 ;;
+      --goal|-g)  goal="$2";                            shift 2 ;;
+      --agent|-a) agent_specs+=("$2");                  shift 2 ;;
+      --dir|-d)   dir="$2";                             shift 2 ;;
+      --preset)   preset="$2";                          shift 2 ;;
+      --model|-m) model_id="$(_resolve_model "$2")";   shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
   done
@@ -669,9 +692,26 @@ _task_run() {
   dir="${dir/#\~/$HOME}"
   [[ ! -d "$dir" ]] && { echo "Error: directory not found: $dir" >&2; exit 1; }
 
+  if [[ -n "$preset" && "$preset" != "coding" && "$preset" != "research" ]]; then
+    echo "Error: unknown preset '$preset'. Valid values: coding, research" >&2; exit 1
+  fi
+
   local task_id="mtask-$(_short_id)"
   local workspace="${MULTI_TASKS_DIR}/${task_id}"
   mkdir -p "${workspace}/workspace" "${workspace}/messages" "${workspace}/status"
+
+  # ── PRESET coding: crear worktree git aislado ────────────────────────────────
+  local agent_spawn_dir="$workspace"
+  if [[ "$preset" == "coding" ]]; then
+    local worktree_path="/tmp/greg-worktree-${task_id}"
+    if git -C "$dir" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+      git -C "$dir" worktree add "$worktree_path" HEAD
+      agent_spawn_dir="$worktree_path"
+      echo "worktree ${worktree_path}"
+    else
+      echo "Warning: --preset coding: '$dir' no es un repo git — continuando sin worktree" >&2
+    fi
+  fi
 
   # Build agent list: always prepend director
   local -a all_agents=("director:Coordinate the team, monitor progress, facilitate cross-pollination between specialists, and ensure the final output is coherent")
@@ -730,8 +770,20 @@ _task_run() {
       skill_file="${SKILLS_DIR}/greg-teammate.md"
     fi
 
+    # ── PRESET: inyección de instrucciones en el rol del agente ───────────────
+    local effective_role="$arole"
+    if [[ "$preset" == "coding" ]]; then
+      effective_role="${effective_role} Trabajas en un worktree git aislado. Antes de marcar done, verifica que el código compila o pasa los tests relevantes."
+    elif [[ "$preset" == "research" ]]; then
+      if echo "$effective_role" | grep -qiE 'recolect|gather|search|busca'; then
+        effective_role="${effective_role} Tu único trabajo es recopilar información cruda en workspace/${aid}.md — no interpretes ni concluyas nada."
+      elif echo "$effective_role" | grep -qiE 'analiz|review|critic|evalúa|sintetiz'; then
+        effective_role="${effective_role} Trabaja exclusivamente desde los archivos en workspace/ — no accedas a fuentes externas. Esto previene sesgo de anclaje."
+      fi
+    fi
+
     local prompt
-    prompt=$(_resolve_skill "$skill_file" "$task_id" "$aid" "$arole" "$goal" "$workspace" "$session_id")
+    prompt=$(_resolve_skill "$skill_file" "$task_id" "$aid" "$effective_role" "$goal" "$workspace" "$session_id")
 
     # Map agent id → session id in manifest
     local tmp; tmp=$(mktemp)
@@ -739,7 +791,7 @@ _task_run() {
       '.agents = [.agents[] | if .id == $aid then . + {session_id: $sid} else . end]' \
       "${workspace}/manifest.json" > "$tmp" && mv "$tmp" "${workspace}/manifest.json"
 
-    _spawn_agent "$session_id" "${aid}-${task_id}" "$workspace" "$prompt"
+    _spawn_agent "$session_id" "${aid}-${task_id}" "$agent_spawn_dir" "$prompt" "$model_id"
     echo "spawned  ${aid} → ${session_id}"
   done
 
@@ -1032,8 +1084,8 @@ cmd_help() {
   cat << 'EOF'
 greg — multi-agent Claude Code manager
 
-  start    [--name <n>] [--dir <path>] [--prompt <p>]     start instance & attach immediately
-  spawn    [--name <n>] [--dir <path>] [--prompt <p>]     start instance in background
+  start    [--name <n>] [--dir <path>] [--prompt <p>] [--model <alias|id>]   start instance & attach immediately
+  spawn    [--name <n>] [--dir <path>] [--prompt <p>] [--model <alias|id>]   start instance in background
   resume   <session-id>                                     resume a past session
   schedule --prompt <p> --at "YYYY-MM-DD HH:MM"           schedule one-shot task
              [--dir <path>] [--name <n>]
@@ -1047,6 +1099,7 @@ greg — multi-agent Claude Code manager
   cancel   <task-id>                                        cancel scheduled task
 
   task run --goal "..." --agent "id:role" [--agent ...]   launch multi-agent task
+           [--preset coding|research] [--model <alias|id>]
   task status <task-id>                                    show agent statuses
   task list                                                list all multi-agent tasks
   task done <task-id> <agent-id>                           mark agent as done
@@ -1054,6 +1107,7 @@ greg — multi-agent Claude Code manager
   task message <task-id> "<msg>"                           send message to director
   task resume <task-id> <agent-id>                         resume a finished agent
 
+Model aliases: opus→claude-opus-4-8  sonnet→claude-sonnet-4-6  haiku→claude-haiku-4-5-20251001
 Default dir: $GREG_VAULT (or $HOME if not set)
 EOF
 }
