@@ -247,8 +247,6 @@ func renderSummaryCards(sum metrics.Summary, width int) string {
 
 // ── main view ─────────────────────────────────────────────────────────────────
 
-const dailyDays = 30
-
 func (m Model) viewGraficas() string {
 	allSess := metrics.AllSessions()
 	sum := metrics.GetSummary(allSess)
