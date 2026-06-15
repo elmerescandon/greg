@@ -6,26 +6,31 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-**UI-v2 — Office View (Agente tab)**
-- Animated ASCII tamagotchi sprites per agent status: `(o_o) ⌨▒░` working, `(-_-) zzZ` waiting, `(o_O)! ‼‼` needs-help, `(^_^) ✔✔` done, `]=[ (^o^)` director
-- Sprites animate on the existing tick cycle (80ms) — working cycles typing bar, waiting cycles Zs, director wiggles crown
-- Office floor layout: agent desks rendered in a responsive grid with colored borders per status
-- Message channel tabs: navigable with `←/→` arrows, displays all `messages/*.md` files from the task workspace
-- Chat panel: renders selected channel file as scrollable conversation with markdown header highlighting
-- Chat input: press `f`/`i` to focus, type message, `Enter` to send via `greg task message`, `Esc` to cancel and return to navigation
-- `sendTaskMessage()` executes `greg task message <task-id> <msg>` as subprocess
-
 **CLI**
-- `greg task message <task-id> "<msg>"` — send a message to the director
-- `greg peek <task-id|session-id> [-n lines]` — tail agent output
-- `greg task resume <task-id> <agent-id>` — resume a finished agent
-- `capture_id` mechanism for reliable `claude_session_id` lookup after spawn
-- `SESSION_ID` template variable in skill resolution
+- `greg peek <session-id|task-id> [-n lines]` — show last N lines (default 30) from a tmux pane, with ANSI escape sequences stripped for clean piped output; pass a task ID to peek all agents at once
+- `capture_id` mechanism for reliable `claude_session_id` lookup — a unique marker is prepended to each agent's prompt and later grepped from `.jsonl` files, replacing the fragile mtime-based approach
+- `{{SESSION_ID}}` template variable in skill resolution
+
+**TUI**
+- `ui-v2/` — new terminal UI written in Go with bubbletea, replacing the Node.js/blessed UI; includes Chat and Agente tabs
+- Agente tab — Office View: animated ASCII tamagotchi sprites per agent status (`(o_o) ⌨▒░` working, `(-_-) zzZ` waiting, `(o_O)!` needs-help, `(^_^) ✔✔` done, `]=[ (^o^)` director)
+- Message channel tabs navigable with `←/→` arrows, displaying all `messages/*.md` from the task workspace
+- Chat panel with scrollable message history and markdown header highlighting
+- Chat input: `f`/`i` to focus, `Enter` to send via `greg task message`, `Esc` to cancel and return to navigation
 
 ### Changed
-- Task system moved to schema_version 2: director synthesis notes replace synthesizer agent
-- Coordinator marks task completed when all agents (including director) mark `done`
-- Updated greg-task, greg-director, greg-teammate skills for schema v2 flow
+- Task system v2 (`schema_version: 2`): the synthesizer agent is removed; the director now produces consolidated output directly in `workspace/director-synthesis-notes.md`
+- Coordinator closes the task when all agents (including director) write `done` — no extra synthesizer step
+- `task recover` and `task revise` replaced by `task done`, `task close`, `task message`, and `task resume`
+- Updated `greg-task` skill docs and `greg-director.md` to reflect the new flow
+
+### Deprecated
+- `ui/` (Node.js/blessed) — the active UI is now `ui-v2/` (Go/bubbletea)
+
+## [0.3.3] - 2026-05-31
+
+### Added
+- UI — model and effort selector on new tabs
 
 ## [0.3.2] - 2026-05-20
 
