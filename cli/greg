@@ -772,13 +772,31 @@ _task_run() {
 
     # ── PRESET: inyección de instrucciones en el rol del agente ───────────────
     local effective_role="$arole"
-    if [[ "$preset" == "coding" ]]; then
-      effective_role="${effective_role} Trabajas en un worktree git aislado. Antes de marcar done, verifica que el código compila o pasa los tests relevantes."
-    elif [[ "$preset" == "research" ]]; then
+    _inject_preset_skill() {
+      local skill_file="$1"
+      local agent_id="$2"
+      if [[ -f "$skill_file" ]]; then
+        local skill_content
+        skill_content=$(sed "s/{{AGENT_ID}}/${agent_id}/g" "$skill_file")
+        echo "$skill_content"
+      fi
+    }
+    if [[ "$preset" == "coding" && "$aid" != "director" ]]; then
+      local coding_skill="${SKILLS_DIR}/greg-preset-coding.md"
+      local coding_content
+      coding_content=$(_inject_preset_skill "$coding_skill" "$aid")
+      [[ -n "$coding_content" ]] && effective_role="${effective_role}"$'\n\n'"${coding_content}"
+    elif [[ "$preset" == "research" && "$aid" != "director" ]]; then
       if echo "$effective_role" | grep -qiE 'recolect|gather|search|busca'; then
-        effective_role="${effective_role} Tu único trabajo es recopilar información cruda en workspace/${aid}.md — no interpretes ni concluyas nada."
+        local collector_skill="${SKILLS_DIR}/greg-preset-research-collector.md"
+        local collector_content
+        collector_content=$(_inject_preset_skill "$collector_skill" "$aid")
+        [[ -n "$collector_content" ]] && effective_role="${effective_role}"$'\n\n'"${collector_content}"
       elif echo "$effective_role" | grep -qiE 'analiz|review|critic|evalúa|sintetiz'; then
-        effective_role="${effective_role} Trabaja exclusivamente desde los archivos en workspace/ — no accedas a fuentes externas. Esto previene sesgo de anclaje."
+        local analyzer_skill="${SKILLS_DIR}/greg-preset-research-analyzer.md"
+        local analyzer_content
+        analyzer_content=$(_inject_preset_skill "$analyzer_skill" "$aid")
+        [[ -n "$analyzer_content" ]] && effective_role="${effective_role}"$'\n\n'"${analyzer_content}"
       fi
     fi
 

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3] - 2026-06-15
+
+### Added
+
+**CLI**
+- `--preset <coding|research>` flag in `greg task run` — behavioral modes that shape how agents operate without fixing team composition:
+  - `coding`: auto-creates an isolated git worktree at `/tmp/greg-worktree-<task_id>` and spawns all agents there; injects structured coding standards (git workflow, build/test verification, quality principles) via `skills/greg-preset-coding.md`
+  - `research`: keyword-detects agent role (collector vs analyzer) and injects role-specific methodology skill files (`skills/greg-preset-research-collector.md`, `skills/greg-preset-research-analyzer.md`); collectors gather raw evidence only, analyzers work exclusively from workspace to prevent anchoring bias
+- `--model <alias|id>` flag in `greg task run`, `greg spawn`, and `greg start` — passes `--model <id>` directly to the Claude invocation; `cmd_start` inherits for free via delegation to `cmd_spawn`
+- `_resolve_model` helper — maps short aliases to full model IDs: `opus→claude-opus-4-8`, `sonnet→claude-sonnet-4-6`, `haiku→claude-haiku-4-5-20251001`; full IDs pass through unchanged
+
+**Skills**
+- `greg-preset-coding.md` — standalone skill injected into coding-preset agents; covers git workflow, build/test verification checklist, quality standards, and cross-agent collaboration protocol
+- `greg-preset-research-collector.md` — standalone skill for collector-role agents; enforces raw evidence gathering with structured output format (source, date, quality flag, content, contradictions)
+- `greg-preset-research-analyzer.md` — standalone skill for analyzer-role agents; enforces workspace-only analysis, explicit confidence levels, bias detection checklist, and structured conclusions format
+
 ## [0.4.2] - 2026-06-15
 
 ### Removed
