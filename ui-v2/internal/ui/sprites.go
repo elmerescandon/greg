@@ -12,38 +12,38 @@ import (
 // Frame is selected as spinIdx % 4.
 
 var spriteWorking = []string{
-	" (o_o)  \n  ⌨░░  ",
-	" (o_o)  \n  ⌨▒░  ",
-	" (O_o)  \n  ⌨▒▒  ",
-	" (o_O)  \n  ⌨█▒  ",
+	" /\\    /\\ \n( ◉    ◉ )\n(   ▽    )\n(  ╰──╯  )\n \\______/ ",
+	" /\\    /\\ \n( ◉    ◉ )\n(   △    )\n(  ╰──╯  )\n \\______/ ",
+	" /\\    /\\ \n( ◎    ◉ )\n(   ▽    )\n(  ╰──╯  )\n \\______/ ",
+	" /\\    /\\ \n( ◉    ◎ )\n(   △    )\n(  ╰──╯  )\n \\______/ ",
 }
 
 var spriteWaiting = []string{
-	" (-_-)  \n   zzZ  ",
-	" (-_-)  \n   zZz  ",
-	" (-.-) \n   Zzz  ",
-	" (-_-)  \n   ZZz  ",
+	" /\\    /\\ \n( ─    ─ )\n(   ω    )\n(      z )\n \\______/ ",
+	" /\\    /\\ \n( ─    ─ )\n(   ω    )\n(     zZ )\n \\______/ ",
+	" /\\    /\\ \n( ╌    ╌ )\n(   ω    )\n(    zZz )\n \\______/ ",
+	" /\\    /\\ \n( ─    ─ )\n(   ω    )\n(   zZzZ )\n \\______/ ",
 }
 
 var spriteNeedsHelp = []string{
-	" (o_O)! \n   ‼‼   ",
-	" !(O_o) \n   ‼‼   ",
-	" (O_O)! \n   !!   ",
-	" !(o_O) \n   !!   ",
+	" /\\    /\\ \n( ◉    ◉ )\n(  >Д<   )\n(!!    !!)\n \\______/ ",
+	" /\\    /\\ \n( ●    ◉ )\n(  >Д<   )\n( !!  !! )\n \\______/ ",
+	" /\\    /\\ \n( ◉    ● )\n(  >Д<   )\n(!  !!  !)\n \\______/ ",
+	" /\\    /\\ \n( ●    ● )\n(  >Д<   )\n(!!!  !!!)\n \\______/ ",
 }
 
 var spriteDone = []string{
-	" (^_^)  \n   ✔✔   ",
-	" (^_^)  \n   ✔✔   ",
-	" (^_^)  \n   ✔✔   ",
-	" (^_^)  \n   ✔✔   ",
+	" /\\    /\\ \n( ^    ^ )\n(  ▽▽▽   )\n(    ✔   )\n \\______/ ",
+	" /\\    /\\ \n( ⌒    ⌒ )\n(  ▽▽▽   )\n(  ✔  ✔  )\n \\______/ ",
+	" /\\    /\\ \n( ^    ^ )\n(  ▽▽▽   )\n( ✔  ✔ ✔ )\n \\______/ ",
+	" /\\    /\\ \n( ⌒    ⌒ )\n(  ▽▽▽   )\n(  ✔  ✔  )\n \\______/ ",
 }
 
 var spriteDirector = []string{
-	"  ]=[   \n (^o^)  ",
-	"  ]=]   \n (^o^)  ",
-	"  [=[   \n (^O^)  ",
-	"  ]=]   \n (^o^)  ",
+	"  ♦════♦  \n( ★    ★ )\n(  ╰◇╯   )\n(  ♦♦♦   )\n \\══════/ ",
+	"  ♦════♦  \n( ☆    ★ )\n(  ╰◇╯   )\n( ♦  ♦  ♦)\n \\══════/ ",
+	"  ♦════♦  \n( ★    ☆ )\n(  ╰◇╯   )\n(  ♦♦♦   )\n \\══════/ ",
+	"  ♦════♦  \n( ★    ★ )\n(  ╰◆╯   )\n( ♦♦♦♦♦  )\n \\══════/ ",
 }
 
 // agentSpriteFrame returns the sprite string for the given status and animation index.
@@ -121,16 +121,15 @@ func renderDeskBox(a task.Agent, agentStatus string, spriteFrame string, isDirec
 		return string(runes[:max-1]) + "…"
 	}
 
-	// Build 8 content lines
 	spriteLines := strings.Split(spriteFrame, "\n")
-	for len(spriteLines) < 2 {
+	for len(spriteLines) < 5 {
 		spriteLines = append(spriteLines, "")
 	}
 
 	var content []string
 
-	// Lines 1-2: sprite face (centered)
-	for _, sl := range spriteLines[:2] {
+	// Sprite lines (all, centered)
+	for _, sl := range spriteLines {
 		content = append(content, center(sl, inner))
 	}
 
