@@ -10,68 +10,105 @@ import (
 	"math"
 	"os"
 	"strings"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/kitty"
+	tea "charm.land/bubbletea/v2"
 )
 
-// IsKittySupported returns true if the terminal supports the Kitty graphics protocol.
+const (
+	kittyImgHourly = 1
+	kittyImgDaily  = 2
+)
+
 func IsKittySupported() bool {
 	tp := os.Getenv("TERM_PROGRAM")
 	return tp == "ghostty" || tp == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
 
-// kittyInlineImage encodes img as a Kitty protocol inline image occupying
-// exactly `rows` terminal rows and `cols` terminal columns.
-// The terminal scales the image to fit those cells.
-func kittyInlineImage(img image.Image, rows, cols int) string {
+// kittyTransmitCmd returns a tea.Cmd that transmits a PNG image to the terminal
+// using the Kitty graphics protocol, then creates a unicode virtual placement.
+// The image is stored in terminal memory with the given ID.
+func kittyTransmitCmd(img image.Image, id, rows, cols int) tea.Cmd {
 	var buf bytes.Buffer
 	png.Encode(&buf, img)
 	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
 
+	var cmds []tea.Cmd
+
+	// Delete any existing image with this ID first
+	cmds = append(cmds, tea.Raw(
+		ansi.KittyGraphics(nil, fmt.Sprintf("a=d,d=i,i=%d,q=2", id)),
+	))
+
+	// Transmit in chunks (max 4096 base64 chars per chunk)
 	const chunkSize = 4096
-	var sb strings.Builder
-	for i := 0; i < len(b64); i += chunkSize {
-		end := i + chunkSize
-		if end > len(b64) {
-			end = len(b64)
-		}
-		chunk := b64[i:end]
+	chunks := splitB64(b64, chunkSize)
+	for i, chunk := range chunks {
 		more := 1
-		if end >= len(b64) {
+		if i == len(chunks)-1 {
 			more = 0
 		}
 		if i == 0 {
-			// First chunk: transmit+display, PNG format, quiet, specify cell dims
-			sb.WriteString(fmt.Sprintf("\x1b_Ga=T,f=100,q=2,r=%d,c=%d,m=%d;%s\x1b\\",
-				rows, cols, more, chunk))
+			// First chunk: transmit (store, don't display), PNG format
+			cmds = append(cmds, tea.Raw(
+				ansi.KittyGraphics(
+					[]byte(chunk),
+					fmt.Sprintf("a=t,f=%d,i=%d,q=2,m=%d", kitty.PNG, id, more),
+				),
+			))
 		} else {
-			sb.WriteString(fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, chunk))
+			cmds = append(cmds, tea.Raw(
+				ansi.KittyGraphics([]byte(chunk), fmt.Sprintf("m=%d", more)),
+			))
 		}
 	}
-	return sb.String()
+
+	// Create unicode virtual placement (U=1 enables unicode placeholders)
+	cmds = append(cmds, tea.Raw(
+		ansi.KittyGraphics(nil, fmt.Sprintf("a=p,U=1,i=%d,c=%d,r=%d,q=2", id, cols, rows)),
+	))
+
+	return tea.Batch(cmds...)
 }
 
-// kittyImageBlock returns the view-string lines for a kitty image.
-//
-// Strategy: put the kitty sequence on the LAST line of the block, prefixed
-// with a cursor-up of (rows-1) rows. bubbletea renders lines top-to-bottom
-// using absolute cursor positioning:
-//   1. Lines 0..rows-2 (empty): bubbletea clears those rows.
-//   2. Line rows-1: bubbletea writes "\033[rows-1A" + kittySeq.
-//      - cursor-up moves to the top of the block.
-//      - kittySeq renders the image (rows tall), advancing cursor to rows-1+1.
-//      - bubbletea's internal cursor also lands at the same row. ✓
-//
-// On subsequent ticks, none of these lines change → bubbletea skips them
-// entirely → the image persists without flicker.
-func kittyImageBlock(img image.Image, rows, cols int) []string {
-	seq := kittyInlineImage(img, rows, cols)
-	// cursor-up by (rows-1) so the image renders starting at the top of the block
-	upMove := fmt.Sprintf("\033[%dA", rows-1)
+func splitB64(s string, size int) []string {
+	var chunks []string
+	for i := 0; i < len(s); i += size {
+		end := i + size
+		if end > len(s) {
+			end = len(s)
+		}
+		chunks = append(chunks, s[i:end])
+	}
+	if len(chunks) == 0 {
+		chunks = []string{""}
+	}
+	return chunks
+}
+
+// kittyPlaceholderLines generates lines of U+10EEEE placeholder characters
+// that the terminal replaces with the image tile at (row, col).
+// The foreground color encodes the image ID (RGB where R=0, G=0, B=id).
+// Each cell contains the placeholder char + a combining diacritic for the row.
+func kittyPlaceholderLines(id, rows, cols int) []string {
+	// Foreground color encodes the image ID.
+	// Kitty protocol: fg color = (r << 16 | g << 8 | b), image_id = that value.
+	// For small IDs, use B channel.
+	fgHex := fmt.Sprintf("#%06x", id)
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(fgHex))
 
 	lines := make([]string, rows)
-	for i := 0; i < rows-1; i++ {
-		lines[i] = "" // cleared by bubbletea before the image renders
+	for row := 0; row < rows; row++ {
+		var sb strings.Builder
+		rowDiacritic := kitty.Diacritic(row)
+		cell := string(kitty.Placeholder) + string(rowDiacritic)
+		for c := 0; c < cols; c++ {
+			sb.WriteString(cell)
+		}
+		lines[row] = style.Render(sb.String())
 	}
-	lines[rows-1] = upMove + seq
 	return lines
 }
 
@@ -115,8 +152,6 @@ func fillRect(img *image.NRGBA, x0, y0, x1, y1 int, c color.RGBA) {
 	}
 }
 
-// DrawHourlyChart renders a bar chart for 24-hour session distribution.
-// colorLow/colorHigh are CSS hex strings for the bar gradient.
 func DrawHourlyChart(values [24]float64, imgW, imgH int, colorLow, colorHigh string) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, imgW, imgH))
 	bg := hexRGBA(colorBg)
@@ -124,10 +159,7 @@ func DrawHourlyChart(values [24]float64, imgW, imgH int, colorLow, colorHigh str
 	hi := hexRGBA(colorHigh)
 	baseline := hexRGBA(colorBorder)
 
-	// Background
 	fillRect(img, 0, 0, imgW, imgH, bg)
-
-	// Baseline at bottom
 	baseH := 2
 	fillRect(img, 0, imgH-baseH, imgW, imgH, baseline)
 
@@ -156,13 +188,12 @@ func DrawHourlyChart(values [24]float64, imgW, imgH int, colorLow, colorHigh str
 		if barH < 1 && values[i] > 0 {
 			barH = 1
 		}
-		x0 := i*(barW+gap)
+		x0 := i * (barW + gap)
 		x1 := x0 + barW
 		y1 := imgH - baseH
 		y0 := y1 - barH
 
 		for y := y0; y < y1; y++ {
-			// Gradient: dim at bottom, bright at top
 			rowT := float64(y1-y) / float64(max(barH, 1))
 			c := lerpRGBA(lo, hi, rowT*t+0.15)
 			for x := x0; x < x1; x++ {
@@ -174,7 +205,6 @@ func DrawHourlyChart(values [24]float64, imgW, imgH int, colorLow, colorHigh str
 	return img
 }
 
-// DrawDailyChart renders a bar chart for daily activity (sessions or cost).
 func DrawDailyChart(values []float64, imgW, imgH int, colorLow, colorHigh string) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, imgW, imgH))
 	bg := hexRGBA(colorBg)
@@ -214,7 +244,7 @@ func DrawDailyChart(values []float64, imgW, imgH int, colorLow, colorHigh string
 		if barH < 1 && v > 0 {
 			barH = 1
 		}
-		x0 := i*(barW+gap)
+		x0 := i * (barW + gap)
 		x1 := x0 + barW
 		y1 := imgH - baseH
 		y0 := y1 - barH

@@ -275,15 +275,8 @@ func (m Model) viewGraficas() string {
 	// ── Hourly chart ───────────────────────────────────────────────────────
 	lines = append(lines, " "+renderHourLabels(w-2))
 
-	if IsKittySupported() {
-		colorLow := colorBorder
-		colorHigh := colorCyan
-		if m.metricsShowCost {
-			colorLow = "#2a1a00"
-			colorHigh = colorAmber
-		}
-		img := DrawHourlyChart(hourDistF, 480, hourlyChartRows*18, colorLow, colorHigh)
-		for _, l := range kittyImageBlock(img, hourlyChartRows, w) {
+	if IsKittySupported() && m.kittyReady {
+		for _, l := range kittyPlaceholderLines(kittyImgHourly, hourlyChartRows, w) {
 			lines = append(lines, l)
 		}
 	} else {
@@ -305,15 +298,8 @@ func (m Model) viewGraficas() string {
 	lines = append(lines, SectionHeader.Render("  Actividad diaria  ")+
 		DimText.Render(fmt.Sprintf("últimos %d días", dailyDays)))
 
-	if IsKittySupported() {
-		colorLow := "#0a1f14"
-		colorHigh := colorGreen
-		if m.metricsShowCost {
-			colorLow = "#2a1a00"
-			colorHigh = colorAmber
-		}
-		img := DrawDailyChart(dailyVals, 480, dailyChartRows*18, colorLow, colorHigh)
-		for _, l := range kittyImageBlock(img, dailyChartRows, w) {
+	if IsKittySupported() && m.kittyReady {
+		for _, l := range kittyPlaceholderLines(kittyImgDaily, dailyChartRows, w) {
 			lines = append(lines, l)
 		}
 	} else {

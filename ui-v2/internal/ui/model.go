@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elmerescandon/greg-ui/internal/claude"
+	"github.com/elmerescandon/greg-ui/internal/metrics"
 	"github.com/elmerescandon/greg-ui/internal/session"
 	"github.com/elmerescandon/greg-ui/internal/task"
 
@@ -67,6 +68,7 @@ type Model struct {
 	vault          string
 	viewMode              ViewMode
 	metricsShowCost       bool
+	kittyReady            bool
 	sidebarFocused        bool
 	sidebarIdx            int
 	multiSelectedIdx      int
@@ -131,6 +133,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.viewMode == ViewGraficas {
+			return m, m.transmitCharts()
+		}
 		return m, nil
 
 	case tickMsg:
@@ -207,6 +212,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewMode = ViewMultiple
 			} else if msg.X >= gs && msg.X < ge {
 				m.viewMode = ViewGraficas
+				return m, m.transmitCharts()
 			}
 		} else if msg.Y == 2 {
 			if i := m.tabAtX(msg.X); i >= 0 {
@@ -502,6 +508,39 @@ func (m *Model) submitAnswer() {
 	}
 }
 
+func (m *Model) transmitCharts() tea.Cmd {
+	if !IsKittySupported() || m.width == 0 {
+		return nil
+	}
+	allSess := metrics.AllSessions()
+	hourDist := metrics.HourlyDist(allSess)
+	var hourDistF [24]float64
+	if m.metricsShowCost {
+		hourDistF = metrics.HourlyCostDist(allSess)
+	} else {
+		hourDistF = hourlyToFloat(hourDist)
+	}
+	dailyStats := metrics.DailyStats(allSess, dailyDays)
+	dailyVals := dailyToFloat(dailyStats, m.metricsShowCost)
+
+	w := m.width
+	hourColorLow, hourColorHigh := colorBorder, colorCyan
+	dailyColorLow, dailyColorHigh := "#0a1f14", colorGreen
+	if m.metricsShowCost {
+		hourColorLow, hourColorHigh = "#2a1a00", colorAmber
+		dailyColorLow, dailyColorHigh = "#2a1a00", colorAmber
+	}
+
+	imgH := DrawHourlyChart(hourDistF, w*8, hourlyChartRows*18, hourColorLow, hourColorHigh)
+	imgD := DrawDailyChart(dailyVals, w*8, dailyChartRows*18, dailyColorLow, dailyColorHigh)
+
+	m.kittyReady = true
+	return tea.Batch(
+		kittyTransmitCmd(imgH, kittyImgHourly, hourlyChartRows, w),
+		kittyTransmitCmd(imgD, kittyImgDaily, dailyChartRows, w),
+	)
+}
+
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	t := m.tab()
 	k := msg.String()
@@ -520,7 +559,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+3":
 		m.viewMode = ViewGraficas
-		return m, nil
+		return m, m.transmitCharts()
 
 	case "ctrl+c":
 		if t.Proc != nil && t.Proc.Cmd != nil && t.Proc.Cmd.Process != nil {
@@ -576,10 +615,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch k {
 		case "s":
 			m.metricsShowCost = false
-			return m, nil
+			return m, m.transmitCharts()
 		case "c":
 			m.metricsShowCost = true
-			return m, nil
+			return m, m.transmitCharts()
 		}
 		return m, nil
 	}
