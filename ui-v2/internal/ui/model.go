@@ -514,7 +514,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewMetricas
 		return m, nil
 
-	case "ctrl+2":
+	case "ctrl+2", "ctrl+space":
 		m.viewMode = ViewMultiple
 		return m, nil
 
