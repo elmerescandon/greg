@@ -14,7 +14,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
-	tea "charm.land/bubbletea/v2"
 )
 
 const (
@@ -27,22 +26,22 @@ func IsKittySupported() bool {
 	return tp == "ghostty" || tp == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
 
-// kittyTransmitCmd returns a tea.Cmd that transmits a PNG image to the terminal
-// using the Kitty graphics protocol, then creates a unicode virtual placement.
-// The image is stored in terminal memory with the given ID.
-func kittyTransmitCmd(img image.Image, id, rows, cols int) tea.Cmd {
-	var buf bytes.Buffer
-	png.Encode(&buf, img)
-	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+// kittyTransmitSeq builds the complete Kitty escape sequence string to:
+// 1. Delete any existing image with this ID
+// 2. Transmit the PNG in chunks
+// 3. Create a unicode virtual placement
+// Everything is concatenated into ONE string so tea.Raw writes it atomically.
+func kittyTransmitSeq(img image.Image, id, rows, cols int) string {
+	var pngBuf bytes.Buffer
+	png.Encode(&pngBuf, img)
+	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
 
-	var cmds []tea.Cmd
+	var sb strings.Builder
 
-	// Delete any existing image with this ID first
-	cmds = append(cmds, tea.Raw(
-		ansi.KittyGraphics(nil, fmt.Sprintf("a=d,d=i,i=%d,q=2", id)),
-	))
+	// Delete existing
+	sb.WriteString(ansi.KittyGraphics(nil, fmt.Sprintf("a=d,d=i,i=%d,q=2", id)))
 
-	// Transmit in chunks (max 4096 base64 chars per chunk)
+	// Transmit in chunks
 	const chunkSize = 4096
 	chunks := splitB64(b64, chunkSize)
 	for i, chunk := range chunks {
@@ -51,26 +50,22 @@ func kittyTransmitCmd(img image.Image, id, rows, cols int) tea.Cmd {
 			more = 0
 		}
 		if i == 0 {
-			// First chunk: transmit (store, don't display), PNG format
-			cmds = append(cmds, tea.Raw(
-				ansi.KittyGraphics(
-					[]byte(chunk),
-					fmt.Sprintf("a=t,f=%d,i=%d,q=2,m=%d", kitty.PNG, id, more),
-				),
+			sb.WriteString(ansi.KittyGraphics(
+				[]byte(chunk),
+				fmt.Sprintf("a=t,f=%d,i=%d,q=2,m=%d", kitty.PNG, id, more),
 			))
 		} else {
-			cmds = append(cmds, tea.Raw(
-				ansi.KittyGraphics([]byte(chunk), fmt.Sprintf("m=%d", more)),
+			sb.WriteString(ansi.KittyGraphics(
+				[]byte(chunk),
+				fmt.Sprintf("m=%d", more),
 			))
 		}
 	}
 
-	// Create unicode virtual placement (U=1 enables unicode placeholders)
-	cmds = append(cmds, tea.Raw(
-		ansi.KittyGraphics(nil, fmt.Sprintf("a=p,U=1,i=%d,c=%d,r=%d,q=2", id, cols, rows)),
-	))
+	// Create unicode virtual placement
+	sb.WriteString(ansi.KittyGraphics(nil, fmt.Sprintf("a=p,U=1,i=%d,c=%d,r=%d,q=2", id, cols, rows)))
 
-	return tea.Batch(cmds...)
+	return sb.String()
 }
 
 func splitB64(s string, size int) []string {

@@ -534,11 +534,12 @@ func (m *Model) transmitCharts() tea.Cmd {
 	imgH := DrawHourlyChart(hourDistF, w*8, hourlyChartRows*18, hourColorLow, hourColorHigh)
 	imgD := DrawDailyChart(dailyVals, w*8, dailyChartRows*18, dailyColorLow, dailyColorHigh)
 
+	// Build one atomic string with both images so tea.Raw writes everything in order
+	combined := kittyTransmitSeq(imgH, kittyImgHourly, hourlyChartRows, w) +
+		kittyTransmitSeq(imgD, kittyImgDaily, dailyChartRows, w)
+
 	m.kittyReady = true
-	return tea.Batch(
-		kittyTransmitCmd(imgH, kittyImgHourly, hourlyChartRows, w),
-		kittyTransmitCmd(imgD, kittyImgDaily, dailyChartRows, w),
-	)
+	return tea.Raw(combined)
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
