@@ -103,6 +103,9 @@ func NewModel(vault string) Model {
 	if active := session.FindActiveSession(); active != nil {
 		name := strings.TrimPrefix(active.ID, "greg-")
 		tab = NewTab(name, active.ClaudeSession, active.ID)
+		if active.Model != "" {
+			tab.Model = active.Model
+		}
 		if active.ClaudeSession != "" {
 			entries := claude.LoadHistory(vault, active.ClaudeSession, 10)
 			tab.Lines = renderHistory(entries)
@@ -397,6 +400,14 @@ func (m *Model) showConfigSelection(t *Tab) {
 		effortQs[i] = claude.Option{Label: eo.Label, Description: eo.Desc}
 	}
 
+	selectedModelIdx := 0
+	for i, mo := range ModelOptions {
+		if mo.ID == t.Model {
+			selectedModelIdx = i
+			break
+		}
+	}
+
 	t.PendingQuestion = &PendingQuestion{
 		ID:         "__config__",
 		ConfigMode: true,
@@ -405,7 +416,7 @@ func (m *Model) showConfigSelection(t *Tab) {
 			{Question: "¿Qué nivel de esfuerzo?", Header: "Esfuerzo", Options: effortQs},
 		},
 		CurrentQ:    0,
-		SelectedIdx: 0,
+		SelectedIdx: selectedModelIdx,
 		Answers:     make(map[string]string),
 	}
 	t.Lines = append(t.Lines, UserMessage.Render("? ¿Qué modelo quieres usar?"))
@@ -467,6 +478,7 @@ func (m *Model) submitAnswer() {
 			for _, mo := range ModelOptions {
 				if mo.Label == selected.Label {
 					t.Model = mo.ID
+					session.UpdateModel(t.GregSessionID, t.Model)
 					break
 				}
 			}
@@ -996,18 +1008,26 @@ func listMsgChannels(workspace string) []string {
 
 func loadStandaloneSessions() []session.Session {
 	taskSessions := map[string]bool{}
+	var completedTaskSessionIDs []string
 	if tasks, err := task.LoadTasks(); err == nil {
 		for _, t := range tasks {
+			var ids []string
 			if t.SynthesizerID != "" {
 				taskSessions[t.SynthesizerID] = true
+				ids = append(ids, t.SynthesizerID)
 			}
 			for _, a := range t.Agents {
 				if a.SessionID != "" {
 					taskSessions[a.SessionID] = true
+					ids = append(ids, a.SessionID)
 				}
+			}
+			if t.CoordinatorStatus == "completed" {
+				completedTaskSessionIDs = append(completedTaskSessionIDs, ids...)
 			}
 		}
 	}
+	session.ArchiveTaskSessions(completedTaskSessionIDs)
 	active, _ := session.LoadSessions()
 	finished, _ := session.LoadFinishedSessions()
 	seen := map[string]bool{}
@@ -1064,6 +1084,9 @@ func (m Model) openSidebarSession() (tea.Model, tea.Cmd) {
 	}
 	name := strings.TrimPrefix(s.ID, "greg-")
 	newT := NewTab(name, s.ClaudeSession, s.ID)
+	if s.Model != "" {
+		newT.Model = s.Model
+	}
 	if s.ClaudeSession != "" {
 		entries := claude.LoadHistory(m.vault, s.ClaudeSession, 10)
 		newT.Lines = renderHistory(entries)

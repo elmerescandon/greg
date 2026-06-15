@@ -16,6 +16,7 @@ type Session struct {
 	Ended          string  `json:"ended,omitempty"`
 	Status         string  `json:"status"`
 	ClaudeSession  string  `json:"claude_session_id,omitempty"`
+	Model          string  `json:"model,omitempty"`
 	OutputTokens   int     `json:"output_tokens,omitempty"`
 	CostUSD        float64 `json:"cost_usd,omitempty"`
 }
@@ -86,6 +87,58 @@ func Spawn(vault string) (Session, error) {
 		return s, err
 	}
 	return s, nil
+}
+
+// ArchiveTaskSessions moves the given session IDs from sessions.json to history.json as finished.
+func ArchiveTaskSessions(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	toArchive := map[string]bool{}
+	for _, id := range ids {
+		toArchive[id] = true
+	}
+	sessions, err := LoadSessions()
+	if err != nil {
+		return
+	}
+	history, _ := LoadFinishedSessions()
+	ended := time.Now().Format("2006-01-02 15:04:05")
+	var remaining []Session
+	for _, s := range sessions {
+		if toArchive[s.ID] {
+			s.Status = "finished"
+			s.Ended = ended
+			history = append(history, s)
+		} else {
+			remaining = append(remaining, s)
+		}
+	}
+	if len(remaining) == len(sessions) {
+		return
+	}
+	data, err := json.MarshalIndent(history, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(HistoryFile(), data, 0644); err != nil {
+		return
+	}
+	SaveSessions(remaining)
+}
+
+func UpdateModel(gregID, model string) {
+	sessions, err := LoadSessions()
+	if err != nil {
+		return
+	}
+	for i := range sessions {
+		if sessions[i].ID == gregID {
+			sessions[i].Model = model
+			break
+		}
+	}
+	SaveSessions(sessions)
 }
 
 func UpdateClaudeSession(gregID, claudeSessionID string) {

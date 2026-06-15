@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-06-15
+
+### Fixed
+
+**TUI (ui-v2)**
+- Model persistence per session — selected model is saved to `sessions.json` and restored when resuming (previously always reset to Opus 4.6 on restart)
+- Sidebar sessions opened from the session list now also restore their saved model
+- Config dialog (`Ctrl+T`) pre-selects the current tab's model instead of always highlighting Opus 4.6
+- Default model changed from `claude-opus-4-6` to `claude-sonnet-4-6` for all new sessions
+- Completed multi-agent task sessions are now automatically moved from `sessions.json` to `history.json` when the sidebar refreshes — no more orphaned "active" sessions from finished tasks
+
 ## [0.4.0] - 2026-06-15
 
 ### Added

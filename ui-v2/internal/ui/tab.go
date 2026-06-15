@@ -46,7 +46,7 @@ func NewTab(name, claudeSession, gregSessionID string) *Tab {
 		GregSessionID: gregSessionID,
 		Lines:         []string{},
 		InputBuf:      "",
-		Model:         "claude-opus-4-6",
+		Model:         "claude-sonnet-4-6",
 		Effort:        "high",
 		ContextPct:    -1,
 	}

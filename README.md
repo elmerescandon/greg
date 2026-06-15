@@ -136,7 +136,7 @@ go build -o greg-ui .
 ln -s "$(pwd)/greg-ui" ~/.local/bin/greg-ui
 ```
 
-The TUI has two views: **Chat** (`Ctrl+1`) and **Agente** (`Ctrl+2`).
+The TUI has two views: **Chat** (`Ctrl+1`) and **Agente** (`Ctrl+2`). Each chat session remembers its model and effort level across restarts — resuming a session restores the model it was using.
 
 The Agente tab shows task details with animated ASCII tamagotchi sprites per agent:
 
