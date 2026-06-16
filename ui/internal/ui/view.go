@@ -1376,60 +1376,7 @@ func formatTaskDate(created string) string {
 }
 
 func (m Model) viewMetricas() string {
-	// Collect all session IDs that belong to any greg task
-	taskSessions := map[string]bool{}
-	if tasks, err := task.LoadTasks(); err == nil {
-		for _, t := range tasks {
-			if t.SynthesizerID != "" {
-				taskSessions[t.SynthesizerID] = true
-			}
-			for _, a := range t.Agents {
-				if a.SessionID != "" {
-					taskSessions[a.SessionID] = true
-				}
-			}
-		}
-	}
-
-	isStandalone := func(s session.Session) bool { return !taskSessions[s.ID] }
-
-	// Active sessions (from sessions.json)
-	active, _ := session.LoadSessions()
-	// Finished sessions (from history.json)
-	finished, _ := session.LoadFinishedSessions()
-
-	// Merge: active first, then finished; filter task sessions; dedup by ID
-	seen := map[string]bool{}
-	var all []session.Session
-	for _, s := range active {
-		if isStandalone(s) && !seen[s.ID] {
-			seen[s.ID] = true
-			all = append(all, s)
-		}
-	}
-	for _, s := range finished {
-		if isStandalone(s) && !seen[s.ID] {
-			seen[s.ID] = true
-			all = append(all, s)
-		}
-	}
-
-	// Active sessions first, then finished; within each group newest first
-	tsKey := func(s session.Session) string {
-		if s.Ended != "" {
-			return s.Ended
-		}
-		return s.Started
-	}
-	sort.Slice(all, func(i, j int) bool {
-		ai := all[i].Status == "active"
-		aj := all[j].Status == "active"
-		if ai != aj {
-			return ai // active before finished
-		}
-		return tsKey(all[i]) > tsKey(all[j])
-	})
-	sessions := all
+	sessions := computeStandaloneSessions()
 
 	sidebarW := 22
 	divW := 1

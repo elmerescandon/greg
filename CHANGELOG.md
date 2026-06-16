@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.5] - 2026-06-16
+
+### Fixed
+
+**TUI**
+- Sidebar session navigation now opens the correct session — `viewMetricas` was computing its own session list independently from the navigation handlers, causing `sidebarIdx` to point to different sessions depending on sort order. Extracted `computeStandaloneSessions()` as a pure function (no side effects, uses `sort.SliceStable` for deterministic ordering); both render and navigation now call the same function.
+
+**CLI**
+- `greg kill` — removed `_claude_session_id_for_dir` fallback; when a session has no `claude_session_id` yet (e.g. closed before sending any message), it is now archived without one instead of inheriting the most-recently-modified `.jsonl` for that directory, which could assign a completely unrelated session's ID and cause 5–7 sessions to share the same `claude_session_id`.
+- `greg resume` — new session entry now includes `claude_session_id` immediately at registration time; previously the field was omitted, causing a subsequent `greg kill` to trigger the buggy fallback and assign a wrong ID.
+
 ## [0.4.4] - 2026-06-16
 
 ### Added

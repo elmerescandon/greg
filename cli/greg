@@ -432,17 +432,23 @@ cmd_kill() {
     echo "Session not found: $id" >&2; exit 1
   fi
 
-  # Detect Claude session ID from project dir
-  local dir claude_sid=""
-  dir=$(echo "$entry" | jq -r '.dir')
-  claude_sid=$(_claude_session_id_for_dir "$dir")
+  # Use claude_session_id captured at runtime — never fall back to dir scan,
+  # that picks the most recently touched .jsonl and assigns it to the wrong session.
+  local claude_sid=""
+  claude_sid=$(echo "$entry" | jq -r '.claude_session_id // empty')
 
   # Archive to history
   local archived
-  archived=$(echo "$entry" | jq \
-    --arg ended "$(_now)" \
-    --arg claude_sid "$claude_sid" \
-    '. + {status:"finished", ended:$ended, claude_session_id:$claude_sid}')
+  if [[ -n "$claude_sid" ]]; then
+    archived=$(echo "$entry" | jq \
+      --arg ended      "$(_now)" \
+      --arg claude_sid "$claude_sid" \
+      '. + {status:"finished", ended:$ended, claude_session_id:$claude_sid}')
+  else
+    archived=$(echo "$entry" | jq \
+      --arg ended "$(_now)" \
+      '. + {status:"finished", ended:$ended}')
+  fi
   local tmp; tmp=$(mktemp)
   jq ". += [$archived]" "${HISTORY_FILE}" > "$tmp" && mv "$tmp" "${HISTORY_FILE}"
 
@@ -454,6 +460,8 @@ cmd_kill() {
   echo "killed ${id}"
   if [[ -n "$claude_sid" ]]; then
     echo "archived  claude_session_id=${claude_sid}"
+  else
+    echo "archived  (sin claude_session_id — sesión sin mensajes)"
   fi
 }
 
@@ -499,14 +507,16 @@ cmd_resume() {
 
   local new_id="greg-$(_short_id)"
 
+  # Escribir claude_session_id inmediatamente — lo conocemos, no hay que capturarlo después.
   local new_entry
   new_entry=$(jq -n \
-    --arg id          "$new_id" \
-    --arg name        "$name" \
-    --arg dir         "$dir" \
-    --arg started     "$(_now)" \
+    --arg id           "$new_id" \
+    --arg name         "$name" \
+    --arg dir          "$dir" \
+    --arg started      "$(_now)" \
+    --arg claude_sid   "$claude_sid" \
     --arg resumed_from "$id" \
-    '{id:$id, name:$name, dir:$dir, started:$started, status:"active", resumed_from:$resumed_from}')
+    '{id:$id, name:$name, dir:$dir, started:$started, status:"active", claude_session_id:$claude_sid, resumed_from:$resumed_from}')
   local tmp; tmp=$(mktemp)
   jq ". += [$new_entry]" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
 

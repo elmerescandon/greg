@@ -704,7 +704,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+shift+down":
 			m.sidebarFocused = true
-			sessions := loadStandaloneSessions()
+			sessions := computeStandaloneSessions()
 			if m.sidebarIdx < len(sessions)-1 {
 				m.sidebarIdx++
 			}
@@ -1175,28 +1175,22 @@ func listMsgChannels(workspace string) []string {
 	return out
 }
 
-func loadStandaloneSessions() []session.Session {
+// computeStandaloneSessions returns the filtered, sorted list of non-task sessions.
+// Pure function — no file mutations. Use this everywhere the list is needed.
+func computeStandaloneSessions() []session.Session {
 	taskSessions := map[string]bool{}
-	var completedTaskSessionIDs []string
 	if tasks, err := task.LoadTasks(); err == nil {
 		for _, t := range tasks {
-			var ids []string
 			if t.SynthesizerID != "" {
 				taskSessions[t.SynthesizerID] = true
-				ids = append(ids, t.SynthesizerID)
 			}
 			for _, a := range t.Agents {
 				if a.SessionID != "" {
 					taskSessions[a.SessionID] = true
-					ids = append(ids, a.SessionID)
 				}
-			}
-			if t.CoordinatorStatus == "completed" {
-				completedTaskSessionIDs = append(completedTaskSessionIDs, ids...)
 			}
 		}
 	}
-	session.ArchiveTaskSessions(completedTaskSessionIDs)
 	active, _ := session.LoadSessions()
 	finished, _ := session.LoadFinishedSessions()
 	seen := map[string]bool{}
@@ -1213,14 +1207,14 @@ func loadStandaloneSessions() []session.Session {
 			all = append(all, s)
 		}
 	}
-	// Active sessions first, then finished; within each group newest first — matches sidebar display order
 	tsKey := func(s session.Session) string {
 		if s.Ended != "" {
 			return s.Ended
 		}
 		return s.Started
 	}
-	sort.Slice(all, func(i, j int) bool {
+	// SliceStable garantiza orden determinista cuando timestamps son iguales.
+	sort.SliceStable(all, func(i, j int) bool {
 		ai := all[i].Status == "active"
 		aj := all[j].Status == "active"
 		if ai != aj {
@@ -1231,8 +1225,31 @@ func loadStandaloneSessions() []session.Session {
 	return all
 }
 
+// loadStandaloneSessions archives completed task sessions and returns the standalone list.
+// Úsalo solo en contextos de inicialización o ticks de mantenimiento, no en cada render.
+func loadStandaloneSessions() []session.Session {
+	var completedTaskSessionIDs []string
+	if tasks, err := task.LoadTasks(); err == nil {
+		for _, t := range tasks {
+			if t.CoordinatorStatus != "completed" {
+				continue
+			}
+			if t.SynthesizerID != "" {
+				completedTaskSessionIDs = append(completedTaskSessionIDs, t.SynthesizerID)
+			}
+			for _, a := range t.Agents {
+				if a.SessionID != "" {
+					completedTaskSessionIDs = append(completedTaskSessionIDs, a.SessionID)
+				}
+			}
+		}
+	}
+	session.ArchiveTaskSessions(completedTaskSessionIDs)
+	return computeStandaloneSessions()
+}
+
 func (m Model) openSidebarSession() (tea.Model, tea.Cmd) {
-	sessions := loadStandaloneSessions()
+	sessions := computeStandaloneSessions()
 	if m.sidebarIdx >= len(sessions) {
 		return m, nil
 	}
