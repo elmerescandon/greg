@@ -790,7 +790,7 @@ func (m Model) viewCtx(t *Tab) string {
 		filled = barW
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
-	label := fmt.Sprintf("%s/%s %s", fmtTokens(t.ContextTokens), fmtTokens(t.ContextWindow), bar)
+	label := fmt.Sprintf("%d%% %s %s/%s", pct, bar, fmtTokens(t.ContextTokens), fmtTokens(t.ContextWindow))
 
 	if pct >= 90 {
 		return CtxHigh.Render(label)
