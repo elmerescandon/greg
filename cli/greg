@@ -181,23 +181,16 @@ _coordinator_loop() {
     done
   done
 
-  echo "[$(date '+%H:%M:%S')] all agents done — closing task" \
+  echo "[$(date '+%H:%M:%S')] all agents done — marking completed, sessions stay alive" \
     >> "${workspace}/coordinator.log"
 
-  # Kill all agent sessions
-  local wmf="${workspace}/manifest.json"
-  while IFS= read -r sid; do
-    [[ -z "$sid" || "$sid" == "null" ]] && continue
-    cmd_kill "$sid" >> "${workspace}/coordinator.log" 2>&1 || true
-  done < <(jq -r '.agents[].session_id // empty' "$wmf" 2>/dev/null)
-
-  # Mark task as completed
+  # Mark task as completed — do NOT kill sessions; they remain available for follow-up
   local meta_file="${MULTI_TASKS_DIR}/${task_id}.json"
   local tmp; tmp=$(mktemp)
   jq --arg ts "$(_now)" '. + {coordinator_status: "completed", completed: $ts}' \
     "$meta_file" > "$tmp" && mv "$tmp" "$meta_file"
 
-  echo "[$(date '+%H:%M:%S')] task ${task_id} complete — all sessions archived" \
+  echo "[$(date '+%H:%M:%S')] task ${task_id} complete — run 'greg task close ${task_id}' to end sessions" \
     >> "${workspace}/coordinator.log"
 }
 

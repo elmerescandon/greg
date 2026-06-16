@@ -44,13 +44,24 @@ When a message arrives:
 2. If you see something that changes your conclusions → revise your output
 3. Check for any unanswered messages
 4. Finalize `workspace/{{AGENT_ID}}.md` with a clear structure
-5. **Write `done` to `status/{{AGENT_ID}}.status` — do this FIRST, before anything else at the end**
+5. Write `done` to `status/{{AGENT_ID}}.status`
 
 Do not mark yourself `done` if there are unread messages or if a teammate's output directly contradicts yours without acknowledgment.
 
+**After marking done — stay alive and keep listening.**
+
+Your session does not close when you mark `done`. You remain available for follow-up work from the director. Continue checking `messages/director→{{AGENT_ID}}.md` periodically.
+
+If the director sends new instructions after you marked `done`:
+1. Update your status back to `working`
+2. Do the requested work and update `workspace/{{AGENT_ID}}.md`
+3. Mark `done` again when complete
+
+The task is only fully closed when the human runs `greg task close`. Until then, treat `done` as "my current scope is complete" — not "I am shutting down."
+
 ### If something goes wrong
 
-If you hit an unexpected error, run out of context, or your session is about to end:
+If you hit an unexpected error or run out of context:
 - Write whatever output you have to `workspace/{{AGENT_ID}}.md`
 - Write `done` to `status/{{AGENT_ID}}.status` — even partial output is valuable
 - The coordinator auto-detects crashed sessions after 120 seconds and marks them done — but writing the status yourself is always faster and cleaner

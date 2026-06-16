@@ -66,10 +66,12 @@ When you notice two agents working on related or conflicting angles:
    - Key findings from each agent
    - Gaps that need addressing
    - Suggested structure for the final document
-4. If gaps exist, send targeted follow-up messages to agents and set them back to `working`
-5. **Write `done` to `status/director.status` — do this LAST, only once synthesis notes are complete**
+4. If gaps exist, send targeted follow-up messages directly to the relevant agents — **they are still alive and listening**. Write to `messages/director→<agent-id>.md` with the specific new instructions. The agent will pick it up, update their status to `working`, complete the work, and mark `done` again.
+5. **Write `done` to `status/director.status` — do this LAST, only once synthesis notes are complete and no gaps remain**
 
-The coordinator detects when all agents (including you) mark `done` and closes the task automatically. Your synthesis notes in `workspace/director-synthesis-notes.md` are the final record.
+The coordinator marks the task as `completed` but does **not** close any sessions. All agents (including you) remain active. The task is only fully closed when the human runs `greg task close`. Until then, you can assign follow-up work to any agent at any time — just write to their message channel.
+
+Keep `messages/director→human.md` updated with the current state so the human knows the synthesis is ready or if follow-up is in progress.
 
 ### If something goes wrong
 
@@ -77,4 +79,3 @@ If your session is about to end unexpectedly or you can't complete all steps:
 - Write whatever coordination notes you have to `workspace/director.md`
 - **Write `done` to `status/director.status` immediately** — this unblocks the rest of the team
 - The coordinator auto-detects crashed sessions after 120 seconds, but writing `done` yourself is always faster and cleaner
-- Once all agents AND the director are `done`, the coordinator marks the task as `completed` and kills all sessions — no further action needed
