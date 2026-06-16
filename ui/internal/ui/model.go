@@ -96,6 +96,17 @@ type claudeErrorMsg struct {
 	text   string
 }
 type claudeDoneMsg struct{ tabIdx int }
+type clipboardPasteMsg string
+
+func readClipboardCmd() tea.Cmd {
+	return func() tea.Msg {
+		out, err := osexec.Command("pbpaste").Output()
+		if err != nil {
+			return nil
+		}
+		return clipboardPasteMsg(out)
+	}
+}
 
 func NewModel(vault string) Model {
 	var tab *Tab
@@ -230,6 +241,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tab().HasNew = false
 			}
 		}
+		return m, nil
+
+	case tea.PasteMsg:
+		m.insertText(msg.Content)
+		return m, nil
+
+	case clipboardPasteMsg:
+		m.insertText(string(msg))
 		return m, nil
 	}
 
@@ -590,6 +609,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.tabs = append(m.tabs[:m.tabIdx], m.tabs[m.tabIdx+1:]...)
 		m.tabIdx = newIdx
 		return m, nil
+
+	case "ctrl+v":
+		return m, readClipboardCmd()
 
 	}
 
@@ -975,6 +997,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			t.CursorPos += len(msg.Text)
 		}
 		return m, nil
+	}
+}
+
+func (m *Model) insertText(text string) {
+	if m.viewMode == ViewMultiple && m.multiDetailMode && m.taskChatFocused {
+		m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos] + text + m.taskChatInput[m.taskChatCursorPos:]
+		m.taskChatCursorPos += len(text)
+		return
+	}
+	t := m.tab()
+	if !t.Running {
+		t.InputBuf = t.InputBuf[:t.CursorPos] + text + t.InputBuf[t.CursorPos:]
+		t.CursorPos += len(text)
 	}
 }
 
