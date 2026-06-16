@@ -27,6 +27,8 @@ func (m Model) View() tea.View {
 		content = m.viewMultiple()
 	case ViewGraficas:
 		content = m.viewGraficas()
+	case ViewConfig:
+		content = m.viewConfig()
 	default:
 		content = m.viewMetricas()
 	}
@@ -38,14 +40,15 @@ func (m Model) View() tea.View {
 	return v
 }
 
-func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd, grafStart, grafEnd int) {
+func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd, grafStart, grafEnd, confStart, confEnd int) {
 	gregW := lipgloss.Width(GregLabel.Render(" GREG"))
 	metW := lipgloss.Width(ViewActive.Render("Chat"))
 	mulW := lipgloss.Width(ViewActive.Render("Agente"))
 	grafW := lipgloss.Width(ViewActive.Render("Métricas"))
+	confW := lipgloss.Width(ViewActive.Render("Config"))
 	gap := 2
 	margin := 1
-	rightTotal := metW + gap + mulW + gap + grafW + margin
+	rightTotal := metW + gap + mulW + gap + grafW + gap + confW + margin
 	leftPad := m.width - gregW - rightTotal
 	if leftPad < 0 {
 		leftPad = 0
@@ -56,6 +59,8 @@ func (m Model) viewBarButtonPositions() (metStart, metEnd, mulStart, mulEnd, gra
 	mulEnd = mulStart + mulW
 	grafStart = mulEnd + gap
 	grafEnd = grafStart + grafW
+	confStart = grafEnd + gap
+	confEnd = confStart + confW
 	return
 }
 
@@ -63,32 +68,24 @@ func (m Model) viewTopBar() string {
 	gregRendered := GregLabel.Render(" GREG")
 	gregW := lipgloss.Width(gregRendered)
 
-	var metStyle, mulStyle, grafStyle lipgloss.Style
-	if m.viewMode == ViewMetricas {
-		metStyle = ViewActive
-	} else {
-		metStyle = ViewInactive
-	}
-	if m.viewMode == ViewMultiple {
-		mulStyle = ViewActive
-	} else {
-		mulStyle = ViewInactive
-	}
-	if m.viewMode == ViewGraficas {
-		grafStyle = ViewActive
-	} else {
-		grafStyle = ViewInactive
+	styleFor := func(mode ViewMode) lipgloss.Style {
+		if m.viewMode == mode {
+			return ViewActive
+		}
+		return ViewInactive
 	}
 
-	metRendered := metStyle.Render("Chat")
-	mulRendered := mulStyle.Render("Agente")
-	grafRendered := grafStyle.Render("Métricas")
+	metRendered := styleFor(ViewMetricas).Render("Chat")
+	mulRendered := styleFor(ViewMultiple).Render("Agente")
+	grafRendered := styleFor(ViewGraficas).Render("Métricas")
+	confRendered := styleFor(ViewConfig).Render("Config")
 	metW := lipgloss.Width(metRendered)
 	mulW := lipgloss.Width(mulRendered)
 	grafW := lipgloss.Width(grafRendered)
+	confW := lipgloss.Width(confRendered)
 	gap := 2
 	margin := 1
-	rightTotal := metW + gap + mulW + gap + grafW + margin
+	rightTotal := metW + gap + mulW + gap + grafW + gap + confW + margin
 
 	leftPad := m.width - gregW - rightTotal
 	if leftPad < 0 {
@@ -98,7 +95,8 @@ func (m Model) viewTopBar() string {
 	row1 := gregRendered + strings.Repeat(" ", leftPad) +
 		metRendered + strings.Repeat(" ", gap) +
 		mulRendered + strings.Repeat(" ", gap) +
-		grafRendered + strings.Repeat(" ", margin)
+		grafRendered + strings.Repeat(" ", gap) +
+		confRendered + strings.Repeat(" ", margin)
 
 	// Row 2: thick ━ under the active button
 	leftThinW := gregW + leftPad
@@ -107,15 +105,19 @@ func (m Model) viewTopBar() string {
 	case ViewMultiple:
 		row2 = SepDim.Render(strings.Repeat("─", leftThinW+metW+gap)) +
 			SepActive.Render(strings.Repeat("━", mulW)) +
-			SepDim.Render(strings.Repeat("─", gap+grafW+margin))
+			SepDim.Render(strings.Repeat("─", gap+grafW+gap+confW+margin))
 	case ViewGraficas:
 		row2 = SepDim.Render(strings.Repeat("─", leftThinW+metW+gap+mulW+gap)) +
 			SepActive.Render(strings.Repeat("━", grafW)) +
+			SepDim.Render(strings.Repeat("─", gap+confW+margin))
+	case ViewConfig:
+		row2 = SepDim.Render(strings.Repeat("─", leftThinW+metW+gap+mulW+gap+grafW+gap)) +
+			SepActive.Render(strings.Repeat("━", confW)) +
 			SepDim.Render(strings.Repeat("─", margin))
-	default:
+	default: // ViewMetricas / Chat
 		row2 = SepDim.Render(strings.Repeat("─", leftThinW)) +
 			SepActive.Render(strings.Repeat("━", metW)) +
-			SepDim.Render(strings.Repeat("─", gap+mulW+gap+grafW+margin))
+			SepDim.Render(strings.Repeat("─", gap+mulW+gap+grafW+gap+confW+margin))
 	}
 
 	return row1 + "\n" + row2
@@ -966,4 +968,41 @@ func (m Model) viewInput() string {
 func (m Model) viewFooter() string {
 	keys := "Enter enviar  Alt+Enter nueva línea  ↑/↓ scroll  PgUp/PgDn saltar  Alt+↑/↓ historial  Ctrl+Shift+←/→ tabs  Ctrl+T nueva  Ctrl+W cerrar  Ctrl+K compactar  Ctrl+Q salir"
 	return FooterStyle.Width(m.width).Render(keys)
+}
+
+func (m Model) viewConfig() string {
+	h := m.height - 2
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  "+SectionHeader.Render("⚙  Configuración"))
+	lines = append(lines, "  "+SepDim.Render(strings.Repeat("─", m.width-4)))
+	lines = append(lines, "")
+	lines = append(lines, "  "+ModelStyle.Render("Tema"))
+	lines = append(lines, "")
+
+	darkLabel := "  Dark mode    oscuro — navy + cyan"
+	lightLabel := "  Light mode   claro — Gruvbox warm"
+
+	if m.darkMode {
+		lines = append(lines, "    "+ViewActive.Render("▶")+" "+QuestionLabel.Render(darkLabel))
+		lines = append(lines, "      "+QuestionLabelDim.Render(lightLabel))
+	} else {
+		lines = append(lines, "      "+QuestionLabelDim.Render(darkLabel))
+		lines = append(lines, "    "+ViewActive.Render("▶")+" "+QuestionLabel.Render(lightLabel))
+	}
+
+	lines = append(lines, "")
+
+	for len(lines) < h-1 {
+		lines = append(lines, "")
+	}
+
+	hint := "↑/↓  cambiar tema  Esc  volver  Ctrl+Q  salir"
+	lines = append(lines, FooterStyle.Width(m.width).Render(hint))
+
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return strings.Join(lines, "\n")
 }

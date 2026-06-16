@@ -12,22 +12,10 @@ import (
 )
 
 // ── heatmap colors (5-level scale, GitHub style) ─────────────────────────────
+// Initialized by InitStyles — nil until then.
 
-var heatSessionColors = []string{
-	"#161b22", // 0: no activity
-	"#0e4429", // 1: low
-	"#006d32", // 2: medium-low
-	"#26a641", // 3: medium-high
-	colorGreen, // 4: high
-}
-
-var heatCostColors = []string{
-	"#161b22",
-	"#2a1500",
-	"#5c3600",
-	"#b36b00",
-	colorAmber,
-}
+var heatSessionColors []string
+var heatCostColors []string
 
 func heatLevel(val, maxVal float64) int {
 	if val <= 0 || maxVal <= 0 {
@@ -296,20 +284,11 @@ func renderHourLabels(width int) string {
 
 // ── summary cards ─────────────────────────────────────────────────────────────
 
-var cardStyle = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color(colorBorder)).
-	Padding(0, 1)
-
-var cardLabelStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color(colorDim))
-
-var cardValueStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color(colorCyan)).
-	Bold(true)
-
-var cardCostStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color(colorAmber))
+// Initialized by InitStyles — zero value until then.
+var cardStyle lipgloss.Style
+var cardLabelStyle lipgloss.Style
+var cardValueStyle lipgloss.Style
+var cardCostStyle lipgloss.Style
 
 func renderSummaryCards(sum metrics.Summary, width int) string {
 	type card struct {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -24,7 +25,37 @@ const (
 	ViewMetricas ViewMode = iota
 	ViewMultiple
 	ViewGraficas
+	ViewConfig
 )
+
+// gregConfig holds persistent user preferences.
+type gregConfig struct {
+	DarkMode bool `json:"dark_mode"`
+}
+
+func gregConfigPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "greg", "config.json")
+}
+
+func loadGregConfig() gregConfig {
+	data, err := os.ReadFile(gregConfigPath())
+	if err != nil {
+		return gregConfig{DarkMode: true}
+	}
+	var c gregConfig
+	if err := json.Unmarshal(data, &c); err != nil {
+		return gregConfig{DarkMode: true}
+	}
+	return c
+}
+
+func saveGregConfig(c gregConfig) {
+	p := gregConfigPath()
+	os.MkdirAll(filepath.Dir(p), 0755)
+	data, _ := json.Marshal(c)
+	os.WriteFile(p, data, 0644)
+}
 
 type ModelOption struct {
 	ID            string
@@ -76,6 +107,7 @@ type Model struct {
 	multiAgentIdx          int
 	multiAgentView         bool
 	multiAgentScrollOffset int
+	darkMode               bool
 
 	// Task detail chat/office view
 	taskChatInput        string
@@ -109,6 +141,9 @@ func readClipboardCmd() tea.Cmd {
 }
 
 func NewModel(vault string) Model {
+	cfg := loadGregConfig()
+	InitStyles(cfg.DarkMode)
+
 	var tab *Tab
 
 	if active := session.FindActiveSession(); active != nil {
@@ -132,6 +167,7 @@ func NewModel(vault string) Model {
 		tabIdx:     0,
 		vault:      vault,
 		historyIdx: -1,
+		darkMode:   cfg.DarkMode,
 	}
 	return m
 }
@@ -227,13 +263,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		if msg.Y <= 1 {
-			ms, me, us, ue, gs, ge := m.viewBarButtonPositions()
+			ms, me, us, ue, gs, ge, cs, ce := m.viewBarButtonPositions()
 			if msg.X >= ms && msg.X < me {
 				m.viewMode = ViewMetricas
 			} else if msg.X >= us && msg.X < ue {
 				m.viewMode = ViewMultiple
 			} else if msg.X >= gs && msg.X < ge {
 				m.viewMode = ViewGraficas
+			} else if msg.X >= cs && msg.X < ce {
+				m.viewMode = ViewConfig
 			}
 		} else if msg.Y == 2 {
 			if i := m.tabAtX(msg.X); i >= 0 {
@@ -566,6 +604,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewGraficas
 		return m, nil
 
+	case "ctrl+4":
+		m.viewMode = ViewConfig
+		return m, nil
+
 	case "ctrl+c":
 		if t.Proc != nil && t.Proc.Cmd != nil && t.Proc.Cmd.Process != nil {
 			t.Proc.Cmd.Process.Signal(os.Interrupt)
@@ -617,6 +659,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if t.PendingQuestion != nil {
 		return m.handleQuestionKey(msg)
+	}
+
+	if m.viewMode == ViewConfig {
+		switch k {
+		case "up", "down", " ", "enter":
+			m.darkMode = !m.darkMode
+			InitStyles(m.darkMode)
+			saveGregConfig(gregConfig{DarkMode: m.darkMode})
+		case "escape":
+			m.viewMode = ViewMetricas
+		}
+		return m, nil
 	}
 
 	if m.viewMode == ViewGraficas {
