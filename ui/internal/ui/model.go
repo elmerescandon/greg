@@ -108,6 +108,7 @@ type Model struct {
 	multiAgentView         bool
 	multiAgentScrollOffset int
 	multiDocIdx            int
+	multiDocSource         string // "workspace" or "messages"
 	darkMode               bool
 
 	// Task detail chat/office view
@@ -116,6 +117,7 @@ type Model struct {
 	taskChatScrollOffset int
 	activeMsgChannel     int
 	taskChatFocused      bool
+	taskSectionFocus     int // 0 = agentes, 1 = docs/mensajes
 }
 
 // Messages
@@ -753,12 +755,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				docWorkspace = tasks[m.multiSelectedIdx].Workspace
 			}
 			switch k {
-			case "escape", "backspace":
+			case "escape", "backspace", "ctrl+shift+up":
 				m.multiAgentView = false
 				m.multiAgentScrollOffset = 0
 			case "left":
 				if docWorkspace != "" {
-					docs := listWorkspaceDocs(docWorkspace)
+					var docs []string
+					if m.multiDocSource == "messages" {
+						docs = listMsgChannels(docWorkspace)
+					} else {
+						docs = listWorkspaceDocs(docWorkspace)
+					}
 					if len(docs) > 0 {
 						m.multiDocIdx = (m.multiDocIdx - 1 + len(docs)) % len(docs)
 						m.multiAgentScrollOffset = 0
@@ -766,7 +773,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			case "right", "tab":
 				if docWorkspace != "" {
-					docs := listWorkspaceDocs(docWorkspace)
+					var docs []string
+					if m.multiDocSource == "messages" {
+						docs = listMsgChannels(docWorkspace)
+					} else {
+						docs = listWorkspaceDocs(docWorkspace)
+					}
 					if len(docs) > 0 {
 						m.multiDocIdx = (m.multiDocIdx + 1) % len(docs)
 						m.multiAgentScrollOffset = 0
@@ -841,11 +853,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.multiDetailMode = false
 				m.multiAgentIdx = 0
 				m.multiDocIdx = 0
+				m.multiDocSource = ""
 				m.taskChatInput = ""
 				m.taskChatCursorPos = 0
 				m.taskChatScrollOffset = 0
 				m.activeMsgChannel = 0
 				m.taskChatFocused = false
+				m.taskSectionFocus = 0
 			case "tab", "right":
 				if curTask != nil {
 					channels := listMsgChannels(curTask.Workspace)
@@ -863,11 +877,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case "up":
-				m.taskChatScrollOffset++
-			case "down":
-				if m.taskChatScrollOffset > 0 {
-					m.taskChatScrollOffset--
+				if m.taskSectionFocus == 1 {
+					m.taskChatScrollOffset++
+				} else if curTask != nil {
+					if m.multiAgentIdx > 0 {
+						m.multiAgentIdx--
+					}
 				}
+			case "down":
+				if m.taskSectionFocus == 1 {
+					if m.taskChatScrollOffset > 0 {
+						m.taskChatScrollOffset--
+					}
+				} else if curTask != nil {
+					agents := task.AllAgents(*curTask)
+					if m.multiAgentIdx < len(agents)-1 {
+						m.multiAgentIdx++
+					}
+				}
+			case "ctrl+shift+up":
+				m.taskSectionFocus = 0
+			case "ctrl+shift+down":
+				m.taskSectionFocus = 1
 			case "pgup":
 				m.taskChatScrollOffset += m.height / 2
 			case "pgdown":
@@ -877,24 +908,26 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			case "f", "i":
 				m.taskChatFocused = true
-			case "[":
-				if curTask != nil {
-					if m.multiAgentIdx > 0 {
-						m.multiAgentIdx--
-					}
-				}
-			case "]":
-				if curTask != nil {
-					agents := task.AllAgents(*curTask)
-					if m.multiAgentIdx < len(agents)-1 {
-						m.multiAgentIdx++
-					}
-				}
 			case "enter":
+				// Open selected message channel in full-screen doc browser
+				if curTask != nil {
+					channels := listMsgChannels(curTask.Workspace)
+					if len(channels) > 0 {
+						activeCh := m.activeMsgChannel
+						if activeCh >= len(channels) {
+							activeCh = 0
+						}
+						m.multiDocSource = "messages"
+						m.multiDocIdx = activeCh
+						m.multiAgentView = true
+						m.multiAgentScrollOffset = 0
+					}
+				}
+			case "o":
+				// Open selected agent workspace doc in full-screen doc browser
 				if curTask != nil {
 					agents := task.AllAgents(*curTask)
 					if m.multiAgentIdx < len(agents) {
-						// Open doc browser at the selected agent's workspace file
 						agentFile := agents[m.multiAgentIdx].ID + ".md"
 						docs := listWorkspaceDocs(curTask.Workspace)
 						m.multiDocIdx = 0
@@ -904,6 +937,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 								break
 							}
 						}
+						m.multiDocSource = "workspace"
 						m.multiAgentView = true
 						m.multiAgentScrollOffset = 0
 					}
