@@ -7,7 +7,6 @@ GREG_HOME="${HOME}/.greg"
 SESSIONS_FILE="${GREG_HOME}/sessions.json"
 HISTORY_FILE="${GREG_HOME}/history.json"
 TASKS_FILE="${GREG_HOME}/tasks.json"
-MAILBOX_DIR="${GREG_HOME}/mailbox"
 MULTI_TASKS_DIR="${GREG_HOME}/multi-tasks"
 SKILLS_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../skills"
 DEFAULT_DIR="${GREG_VAULT:-$HOME}"
@@ -17,7 +16,7 @@ GREG_BIN="$(realpath "${BASH_SOURCE[0]}")"
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 _init() {
-  mkdir -p "${GREG_HOME}" "${MAILBOX_DIR}" "${MULTI_TASKS_DIR}"
+  mkdir -p "${GREG_HOME}" "${MULTI_TASKS_DIR}"
   [[ -f "${SESSIONS_FILE}" ]] || echo '[]' > "${SESSIONS_FILE}"
   [[ -f "${HISTORY_FILE}" ]]  || echo '[]' > "${HISTORY_FILE}"
   [[ -f "${TASKS_FILE}" ]]    || echo '[]' > "${TASKS_FILE}"
@@ -51,6 +50,7 @@ _resolve_skill() {
   content="${content//'{{TASK_GOAL}}'/$task_goal}"
   content="${content//'{{WORKSPACE}}'/$workspace}"
   content="${content//'{{SESSION_ID}}'/$session_id}"
+  content="${content//'{{GREG_BIN}}'/$GREG_BIN}"
 
   echo "$content"
 }
@@ -61,9 +61,6 @@ _spawn_agent() {
   local workspace="$3"
   local prompt="$4"
   local model_id="${5:-}"
-
-  mkdir -p "${MAILBOX_DIR}/${session_id}"
-  touch "${MAILBOX_DIR}/${session_id}/inbox.md"
 
   local entry
   entry=$(jq -n \
@@ -276,10 +273,6 @@ cmd_spawn() {
     echo "Error: directory not found: $dir" >&2; exit 1
   fi
 
-  # Mailbox
-  mkdir -p "${MAILBOX_DIR}/${session_id}"
-  touch "${MAILBOX_DIR}/${session_id}/inbox.md"
-
   # Register session
   local entry
   entry=$(jq -n \
@@ -401,53 +394,31 @@ cmd_attach() {
   tmux attach -t "$id"
 }
 
-cmd_send() {
+cmd_send_msg() {
+  local from=""
   local to=""
+  local workspace=""
   local message=""
-  local inject=true  # send via tmux send-keys so agent sees it as user input
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --to)        to="$2";      shift 2 ;;
-      --no-inject) inject=false; shift   ;;
-      *)           message="$1"; shift   ;;
+      --from|-f)      from="$2";      shift 2 ;;
+      --to|-t)        to="$2";        shift 2 ;;
+      --workspace|-w) workspace="$2"; shift 2 ;;
+      *)              message="$1";   shift   ;;
     esac
   done
 
-  [[ -z "$to" || -z "$message" ]] && {
-    echo "Usage: greg send --to <session-id> \"<message>\"" >&2; exit 1
+  [[ -z "$from" || -z "$to" || -z "$workspace" || -z "$message" ]] && {
+    echo "Usage: greg send-msg --from <id> --to <id> --workspace <path> \"<message>\"" >&2; exit 1
   }
 
-  local inbox="${MAILBOX_DIR}/${to}/inbox.md"
-  [[ -d "${MAILBOX_DIR}/${to}" ]] || { echo "Session not found: $to" >&2; exit 1; }
+  local messages_dir="${workspace}/messages"
+  mkdir -p "$messages_dir"
+  local msg_file="${messages_dir}/${from}→${to}.md"
 
-  # Write to mailbox
-  echo "[$(date '+%H:%M:%S')] ${message}" >> "$inbox"
-
-  # Inject directly into the agent's terminal (agent sees it as user input)
-  if [[ "$inject" == true ]]; then
-    tmux send-keys -t "$to" "$message" Enter 2>/dev/null || {
-      echo "Warning: could not send-keys to ${to} (session may not be running)" >&2
-    }
-  fi
-
+  printf '\n### [%s] %s → %s\n%s\n' "$(date '+%H:%M:%S')" "$from" "$to" "$message" >> "$msg_file"
   echo "sent → ${to}"
-}
-
-cmd_inbox() {
-  local session_id="${1:-}"
-  [[ -z "$session_id" ]] && session_id="$(_current_session)"
-  [[ -z "$session_id" ]] && {
-    echo "Usage: greg inbox <session-id>  (or run from inside a greg session)" >&2; exit 1
-  }
-
-  local inbox="${MAILBOX_DIR}/${session_id}/inbox.md"
-  if [[ -f "$inbox" && -s "$inbox" ]]; then
-    echo "=== inbox: ${session_id} ==="
-    cat "$inbox"
-  else
-    echo "(inbox empty)"
-  fi
 }
 
 cmd_kill() {
@@ -480,7 +451,6 @@ cmd_kill() {
   tmp=$(mktemp)
   jq "map(select(.id != \"${id}\"))" "${SESSIONS_FILE}" > "$tmp" && mv "$tmp" "${SESSIONS_FILE}"
 
-  rm -rf "${MAILBOX_DIR}/${id}"
   echo "killed ${id}"
   if [[ -n "$claude_sid" ]]; then
     echo "archived  claude_session_id=${claude_sid}"
@@ -528,8 +498,6 @@ cmd_resume() {
   }
 
   local new_id="greg-$(_short_id)"
-  mkdir -p "${MAILBOX_DIR}/${new_id}"
-  touch "${MAILBOX_DIR}/${new_id}/inbox.md"
 
   local new_entry
   new_entry=$(jq -n \
@@ -952,28 +920,17 @@ _task_message() {
   local workspace
   workspace=$(jq -r '.workspace' "$meta_file")
 
-  local inbox="${workspace}/messages/human→director.md"
-  mkdir -p "${workspace}/messages"
-  printf '\n### [%s] Human\n%s\n' "$(_now)" "$message" >> "$inbox"
+  cmd_send_msg --from "human" --to "director" --workspace "$workspace" "$message"
 
-  # Notify director via tmux if session is alive
+  # Notify director via tmux if session is alive (human→director is the only case that still needs this,
+  # since the human is not a greg agent and can't use wait-msg)
   local wmf="${workspace}/manifest.json"
   local director_sid
   director_sid=$(jq -r '.agents[] | select(.id == "director") | .session_id // empty' "$wmf" 2>/dev/null)
 
   if [[ -n "$director_sid" ]] && tmux has-session -t "$director_sid" 2>/dev/null; then
-    local before_lines
-    before_lines=$(wc -l < "${workspace}/messages/director→human.md" 2>/dev/null || echo 0)
-    tmux send-keys -t "$director_sid" "[HUMAN MESSAGE] Check messages/human→director.md now and respond in messages/director→human.md"
-    sleep 3
-    tmux send-keys -t "$director_sid" "" Enter
+    tmux send-keys -t "$director_sid" "[HUMAN MESSAGE] Check messages/human→director.md" Enter 2>/dev/null
     echo "delivered → director (${director_sid})"
-    # Retry si el director no responde en 10s
-    (sleep 10 && \
-      after=$(wc -l < "${workspace}/messages/director→human.md" 2>/dev/null || echo 0) && \
-      [[ "$after" -le "$before_lines" ]] && \
-      tmux send-keys -t "$director_sid" "" Enter 2>/dev/null && \
-      echo "retry → Enter reenviado a ${director_sid}") &
   else
     echo "queued → director inbox (session not active)"
   fi
@@ -1014,8 +971,6 @@ _task_resume() {
   }
 
   local new_id="greg-$(_short_id)"
-  mkdir -p "${MAILBOX_DIR}/${new_id}"
-  touch "${MAILBOX_DIR}/${new_id}/inbox.md"
 
   local new_entry
   new_entry=$(jq -n \
@@ -1052,6 +1007,96 @@ _task_list() {
     printf "  %-20s [%-14s] %s  %s\n" "$task_id" "$coordinator_status" "$created" "${goal:0:60}"
   done
   [[ "$found" == false ]] && echo "  (no multi-agent tasks)"
+}
+
+cmd_wait_msg() {
+  local agent_id=""
+  local workspace=""
+  local timeout=300
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent|-a)     agent_id="$2";   shift 2 ;;
+      --workspace|-w) workspace="$2";  shift 2 ;;
+      --timeout|-t)   timeout="$2";    shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  [[ -z "$agent_id" || -z "$workspace" ]] && {
+    echo "Usage: greg wait-msg --agent <id> --workspace <path> [--timeout <secs>]" >&2; exit 1
+  }
+
+  local messages_dir="${workspace}/messages"
+  mkdir -p "$messages_dir"
+
+  echo "waiting for message → ${agent_id} (timeout: ${timeout}s)"
+
+  if command -v fswatch > /dev/null 2>&1; then
+    ( fswatch "$messages_dir" 2>/dev/null | grep -m 1 "→${agent_id}\.md" > /dev/null ) &
+    local bg_pid=$!
+    ( sleep "$timeout" && kill "$bg_pid" 2>/dev/null ) &
+    local kill_pid=$!
+    wait "$bg_pid" 2>/dev/null
+    local exit_code=$?
+    kill "$kill_pid" 2>/dev/null
+    wait "$kill_pid" 2>/dev/null
+    if [[ $exit_code -ne 0 ]]; then
+      echo "timeout: no message received in ${timeout}s" >&2; exit 1
+    fi
+  else
+    # Fallback: poll every 2 seconds
+    local marker="${workspace}/.msg-read-${agent_id}"
+    [[ ! -f "$marker" ]] && touch "$marker"
+    local start; start=$(date +%s)
+    while true; do
+      local new
+      new=$(find "$messages_dir" -name "*→${agent_id}.md" -newer "$marker" 2>/dev/null | head -1)
+      [[ -n "$new" ]] && break
+      local now; now=$(date +%s)
+      if [[ $(( now - start )) -ge $timeout ]]; then
+        echo "timeout: no message received in ${timeout}s" >&2; exit 1
+      fi
+      sleep 2
+    done
+  fi
+
+  echo "message received"
+  cmd_check_msgs --agent "$agent_id" --workspace "$workspace"
+}
+
+cmd_check_msgs() {
+  local agent_id=""
+  local workspace=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent|-a)     agent_id="$2";   shift 2 ;;
+      --workspace|-w) workspace="$2";  shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  [[ -z "$agent_id" || -z "$workspace" ]] && {
+    echo "Usage: greg check-msgs --agent <id> --workspace <path>" >&2; exit 1
+  }
+
+  local messages_dir="${workspace}/messages"
+  local marker="${workspace}/.msg-read-${agent_id}"
+
+  [[ ! -f "$marker" ]] && touch "$marker"
+
+  local found=false
+  while IFS= read -r msg_file; do
+    found=true
+    local sender
+    sender=$(basename "$msg_file" | sed "s/→${agent_id}\\.md$//")
+    echo "=== [$(date '+%H:%M:%S')] message from ${sender} ==="
+    cat "$msg_file"
+    echo ""
+  done < <(find "$messages_dir" -name "*→${agent_id}.md" -newer "$marker" 2>/dev/null | sort)
+
+  [[ "$found" == true ]] && touch "$marker" || echo "(no new messages for ${agent_id})"
 }
 
 cmd_peek() {
@@ -1114,10 +1159,11 @@ greg — multi-agent Claude Code manager
   history  [--limit N]                                      show last N finished sessions (default 10)
   attach   <session-id>                                     tmux attach
   peek     <session-id|task-id> [-n lines]                  show last N lines from tmux pane (default 30)
-  send     --to <session-id> "<message>"                   message another agent
-  inbox    [<session-id>]                                   read inbox
   kill     <session-id>                                     stop & archive session
   cancel   <task-id>                                        cancel scheduled task
+
+  wait-msg   --agent <id> --workspace <path> [--timeout <secs>]   block until a message arrives (uses fswatch)
+  check-msgs --agent <id> --workspace <path>               print and mark new messages as read
 
   task run --goal "..." --agent "id:role" [--agent ...]   launch multi-agent task
            [--preset coding|research] [--model <alias|id>]
@@ -1145,12 +1191,12 @@ case "${1:-help}" in
   history)  shift; cmd_history  "$@" ;;
   list)     cmd_list ;;
   attach)   shift; cmd_attach   "$@" ;;
-  send)     shift; cmd_send     "$@" ;;
-  inbox)    shift; cmd_inbox    "$@" ;;
   peek)     shift; cmd_peek     "$@" ;;
   kill)     shift; cmd_kill     "$@" ;;
   cancel)   shift; cmd_cancel   "$@" ;;
-  task)     shift; cmd_task     "$@" ;;
+  task)       shift; cmd_task      "$@" ;;
+  wait-msg)   shift; cmd_wait_msg  "$@" ;;
+  check-msgs) shift; cmd_check_msgs "$@" ;;
   _coordinator) shift; _coordinator_loop "$@" ;;
   help|--help|-h) cmd_help ;;
   *) echo "Unknown command: $1. Run 'greg help'" >&2; exit 1 ;;

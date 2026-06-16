@@ -57,7 +57,6 @@ greg spawn --name "refactor" --prompt "refactor auth module"
 greg list                                           # sessions, tasks, and recent history
 greg peek <session-id> [-n 50]                      # last N lines from a session (default 30)
 greg attach <session-id>                            # attach to tmux session
-greg send --to <session-id> "add error handling"    # send a message
 greg kill <session-id>                              # stop and archive
 greg resume <session-id>                            # resume a finished session
 greg history [--limit N]                            # show last N finished sessions
@@ -76,6 +75,11 @@ greg task message <task-id> "redirect X"  # send a message to the director
 greg task done <task-id> <agent-id>       # force-mark an agent as done
 greg task close <task-id>                 # close task (requires all agents done)
 greg task resume <task-id> <agent-id>     # resume a finished agent with full context
+
+# Agent messaging (used inside agent sessions, via skills)
+greg send-msg --from <id> --to <id> --workspace <path> "message"   # send with timestamp
+greg wait-msg --agent <id> --workspace <path> [--timeout <secs>]   # block until message arrives
+greg check-msgs --agent <id> --workspace <path>                     # drain unread messages
 ```
 
 ## How multi-agent tasks work
@@ -101,7 +105,7 @@ greg task resume <task-id> <agent-id>     # resume a finished agent with full co
 1. `greg task run` spawns all agents in parallel, each in its own tmux session
 2. A **director** agent is auto-injected to coordinate, cross-pollinate, and synthesize
 3. Agents write to `workspace/<agent-id>.md` progressively — teammates can read in real time
-4. Agents communicate via `messages/<from>→<to>.md` when they need to coordinate
+4. Agents communicate via `greg send-msg` — each message is appended with a timestamp; `greg wait-msg` blocks deterministically on `fswatch` until a reply arrives
 5. A background **coordinator** process polls `status/` files every 15 seconds
 6. When all agents (including the director) write `done`, the coordinator closes the task
 
@@ -164,7 +168,7 @@ greg injects prompt templates (skills) into each agent to define their behavior:
 
 | Skill | Purpose |
 |-------|---------|
-| `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent |
+| `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent; exposes `send-msg`, `wait-msg`, `check-msgs` |
 | `greg-director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
 | `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
 | `greg-task` | `/greg-task` — interactive skill to design and launch a multi-agent task |

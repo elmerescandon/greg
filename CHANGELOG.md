@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.4] - 2026-06-16
+
+### Added
+
+**CLI**
+- `greg send-msg --from <id> --to <id> --workspace <path> "<message>"` — deterministic agent-to-agent messaging; appends to `messages/<from>→<to>.md` with a `### [HH:MM:SS] from → to` timestamp header on every write
+- `greg wait-msg --agent <id> --workspace <path> [--timeout <secs>]` — blocks until a message addressed to the agent arrives; uses `fswatch` to watch the messages directory and unblocks on the first filesystem event matching `*→<agent-id>.md`; falls back to 2-second polling if `fswatch` is not available; calls `check-msgs` on unblock
+- `greg check-msgs --agent <id> --workspace <path>` — non-blocking drain of unread messages since last check; uses a `.msg-read-<agent-id>` marker file to track position; prints nothing if no new messages
+- `{{GREG_BIN}}` template variable in skill resolution — agents receive the absolute path to the greg binary so they can invoke `send-msg`, `wait-msg`, and `check-msgs` directly
+
+**Skills**
+- `greg-mailbox.md` updated: "To send" now uses `greg send-msg`; "To check" now uses `greg check-msgs`; new "Blocking wait" section documents `greg wait-msg` for agents in `waiting` state; "When fully complete" requires `greg check-msgs` before writing `done`
+
+### Removed
+
+**CLI**
+- `greg send` — tmux send-keys mailbox; replaced by `greg send-msg`
+- `greg inbox` — mailbox inbox reader; replaced by `greg check-msgs`
+- `MAILBOX_DIR` (`~/.greg/mailbox/`) — the per-session mailbox directory system is gone; all agent messaging now goes through the task workspace `messages/` directory
+
+### Changed
+
+**CLI**
+- `greg task message` — now calls `cmd_send_msg` internally for consistent timestamp format; retains tmux notification to the director (only case where the sender is not a greg agent)
+- `greg kill` — no longer removes `~/.greg/mailbox/<id>/`
+
 ## [0.4.3] - 2026-06-15
 
 ### Added

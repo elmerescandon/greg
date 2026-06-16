@@ -37,13 +37,30 @@ Always write your initial status as `working` when you start.
 ## Communication rules
 
 **To send a message to a teammate:**
-1. Write to `messages/{{AGENT_ID}}→<teammate-id>.md`
-2. Be specific: what you need and why
-3. Keep working on other aspects while waiting — don't block
 
-**To check for incoming messages:**
-- Read `messages/<teammate-id>→{{AGENT_ID}}.md` periodically
-- When a message arrives, acknowledge it by updating your output or responding in a new message
+```bash
+{{GREG_BIN}} send-msg --from {{AGENT_ID}} --to <teammate-id> --workspace {{WORKSPACE}} "your message"
+```
+
+Be specific: what you need and why. Keep working on other aspects while waiting — don't block.
+
+**To check for new messages (non-blocking):**
+
+```bash
+{{GREG_BIN}} check-msgs --agent {{AGENT_ID}} --workspace {{WORKSPACE}}
+```
+
+Run this command. It prints all messages received since the last check and marks them as read. Acknowledge each message by updating your output or responding.
+
+**To wait for a response (blocking):**
+
+When you wrote `waiting` to your status because you need a teammate's response before continuing, run:
+
+```bash
+{{GREG_BIN}} wait-msg --agent {{AGENT_ID}} --workspace {{WORKSPACE}}
+```
+
+This blocks until a message arrives addressed to you, then prints it immediately. Your process unblocks deterministically — no polling, no manual file reads.
 
 **To read a teammate's progress:**
 - Read `workspace/<teammate-id>.md` at any time
@@ -54,8 +71,9 @@ Always write your initial status as `working` when you start.
 Write your findings progressively to `workspace/{{AGENT_ID}}.md`. Don't wait until you're done — write as you go so teammates can read your progress.
 
 When fully complete:
-1. Finalize `workspace/{{AGENT_ID}}.md`
-2. **Write `done` to `status/{{AGENT_ID}}.status` — this is the most critical step**
+1. Run `{{GREG_BIN}} check-msgs --agent {{AGENT_ID}} --workspace {{WORKSPACE}}` — drain and process any pending messages before closing
+2. Finalize `workspace/{{AGENT_ID}}.md`
+3. **Write `done` to `status/{{AGENT_ID}}.status` — this is the most critical step**
 
 ## Resilience: always write your status
 
