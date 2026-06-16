@@ -962,8 +962,18 @@ _task_message() {
   director_sid=$(jq -r '.agents[] | select(.id == "director") | .session_id // empty' "$wmf" 2>/dev/null)
 
   if [[ -n "$director_sid" ]] && tmux has-session -t "$director_sid" 2>/dev/null; then
-    tmux send-keys -t "$director_sid" "[HUMAN MESSAGE] Check messages/human→director.md now and respond in messages/director→human.md" Enter
+    local before_lines
+    before_lines=$(wc -l < "${workspace}/messages/director→human.md" 2>/dev/null || echo 0)
+    tmux send-keys -t "$director_sid" "[HUMAN MESSAGE] Check messages/human→director.md now and respond in messages/director→human.md"
+    sleep 3
+    tmux send-keys -t "$director_sid" "" Enter
     echo "delivered → director (${director_sid})"
+    # Retry si el director no responde en 10s
+    (sleep 10 && \
+      after=$(wc -l < "${workspace}/messages/director→human.md" 2>/dev/null || echo 0) && \
+      [[ "$after" -le "$before_lines" ]] && \
+      tmux send-keys -t "$director_sid" "" Enter 2>/dev/null && \
+      echo "retry → Enter reenviado a ${director_sid}") &
   else
     echo "queued → director inbox (session not active)"
   fi
