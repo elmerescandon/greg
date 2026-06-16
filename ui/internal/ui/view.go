@@ -764,16 +764,22 @@ func (m Model) viewStatusBar() string {
 	modelShort := strings.TrimPrefix(t.Model, "claude-")
 	parts = append(parts, ModelStyle.Render(fmt.Sprintf(" [%s·%s]", modelShort, t.Effort)))
 
-	if m.globalCost > 0 {
-		parts = append(parts, CostStyle.Render(fmt.Sprintf(" $%.3f", m.globalCost)))
-	}
-
 	if t.ContextPct >= 0 {
 		parts = append(parts, " "+m.viewCtx(t))
 	}
 
 	content := strings.Join(parts, "")
 	return StatusBarStyle.Width(m.width).Render(content)
+}
+
+func fmtTokens(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%dk", n/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func (m Model) viewCtx(t *Tab) string {
@@ -784,7 +790,7 @@ func (m Model) viewCtx(t *Tab) string {
 		filled = barW
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
-	label := fmt.Sprintf("%d%% %s", pct, bar)
+	label := fmt.Sprintf("%s/%s %s", fmtTokens(t.ContextTokens), fmtTokens(t.ContextWindow), bar)
 
 	if pct >= 90 {
 		return CtxHigh.Render(label)
