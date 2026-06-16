@@ -65,15 +65,17 @@ func agentSpriteFrame(status string, spinIdx int) string {
 // renderDeskBox renders a single agent desk as a []string of exactly 10 lines.
 // boxW is the total width including borders (minimum 22).
 // Lines use ANSI color for borders; content is plain text.
-func renderDeskBox(a task.Agent, agentStatus string, spriteFrame string, isDirector bool, boxW int) []string {
+func renderDeskBox(a task.Agent, agentStatus string, spriteFrame string, isDirector bool, boxW int, selected bool) []string {
 	if boxW < 22 {
 		boxW = 22
 	}
 	inner := boxW - 2
 
-	// Border style based on status
+	// Border style based on status (selected overrides to cyan)
 	var borderStyle lipgloss.Style
-	if isDirector {
+	if selected {
+		borderStyle = ViewActive
+	} else if isDirector {
 		borderStyle = SynthesizerStyle
 	} else {
 		switch agentStatus {

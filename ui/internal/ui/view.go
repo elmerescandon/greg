@@ -260,7 +260,23 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	return selector + coloredBullet + TaskRowDim.Render(rest)
 }
 
-func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
+// listWorkspaceDocs returns sorted .md filenames inside workspace/workspace/.
+func listWorkspaceDocs(workspace string) []string {
+	entries, err := os.ReadDir(workspace + "/workspace")
+	if err != nil {
+		return nil
+	}
+	var docs []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			docs = append(docs, e.Name())
+		}
+	}
+	sort.Strings(docs)
+	return docs
+}
+
+func (m Model) viewAgentOutput(t task.Task, _ task.Agent) string {
 	h := m.height - 2
 	headerH := 2
 	footerH := 2
@@ -269,11 +285,25 @@ func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
 		contentH = 1
 	}
 
-	// Read workspace file — refreshed on every tick
-	filePath := t.Workspace + "/workspace/" + a.ID + ".md"
+	// Document browser: pick file by multiDocIdx
+	docs := listWorkspaceDocs(t.Workspace)
+	var filePath, fileName string
+	if len(docs) == 0 {
+		filePath = ""
+		fileName = "—"
+	} else {
+		idx := m.multiDocIdx
+		if idx >= len(docs) {
+			idx = 0
+		}
+		fileName = docs[idx]
+		filePath = t.Workspace + "/workspace/" + fileName
+	}
+
+	// Read file — refreshed on every tick
 	raw, err := os.ReadFile(filePath)
 	var allLines []string
-	if err != nil {
+	if err != nil || filePath == "" {
 		allLines = []string{"", "  " + DimText.Render("sin output aún…")}
 	} else {
 		contentWidth := m.width - 2
@@ -288,7 +318,7 @@ func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
 		}
 	}
 
-	// Scroll: offset 0 = bottom (tail), increasing offset scrolls up
+	// Scroll: offset 0 = tail, increasing offset scrolls up
 	total := len(allLines)
 	off := m.multiAgentScrollOffset
 	start := total - contentH - off
@@ -304,28 +334,34 @@ func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
 		visible = append(visible, "")
 	}
 
-	// Header
-	agentStatus := task.AgentStatus(t.Workspace, a.ID)
+	// Header: filename + status if there's a matching agent
+	agentID := strings.TrimSuffix(fileName, ".md")
+	agentStatus := task.AgentStatus(t.Workspace, agentID)
 	var statusStr string
 	switch agentStatus {
 	case "done", "completed":
 		statusStr = StatusGreen.Render("✔ " + agentStatus)
-	case "running", "working":
+	case "working":
 		statusStr = StatusYellow.Render("◉ " + agentStatus + " " + spinFrames[m.spinIdx])
+	case "—":
+		statusStr = ""
 	default:
 		statusStr = DimText.Render("◌ " + agentStatus)
 	}
-	var breadcrumb string
-	if a.IsSynthesizer {
-		breadcrumb = fmt.Sprintf("← %s / ⚡ synthesizer", t.TaskID)
-	} else {
-		breadcrumb = fmt.Sprintf("← %s / %s", t.TaskID, a.ID)
+
+	docPos := ""
+	if len(docs) > 0 {
+		idx := m.multiDocIdx
+		if idx >= len(docs) {
+			idx = 0
+		}
+		docPos = DimText.Render(fmt.Sprintf("  %d/%d", idx+1, len(docs)))
 	}
-	var header1 string
-	if a.IsSynthesizer {
-		header1 = " " + SynthesizerStyle.Render(breadcrumb) + "   " + statusStr
-	} else {
-		header1 = " " + ViewActive.Render(breadcrumb) + "   " + statusStr
+
+	breadcrumb := fmt.Sprintf("← %s / %s", t.TaskID, fileName)
+	header1 := " " + ViewActive.Render(breadcrumb) + docPos
+	if statusStr != "" {
+		header1 += "   " + statusStr
 	}
 	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
 
@@ -339,8 +375,9 @@ func (m Model) viewAgentOutput(t task.Task, a task.Agent) string {
 	if off > 0 {
 		scrollHint = fmt.Sprintf("  [+%d líneas]", off)
 	}
+	navHint := "←/→ documento  ↑/↓ scroll  PgUp/PgDn saltar" + scrollHint + "  Esc volver  Ctrl+Q salir"
 	out = append(out, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	out = append(out, " "+DimText.Render("↑/↓ scroll  PgUp/PgDn saltar"+scrollHint+"  Esc volver  Ctrl+Q salir"))
+	out = append(out, " "+DimText.Render(navHint))
 
 	return strings.Join(out, "\n")
 }
@@ -428,6 +465,7 @@ func (m Model) viewOfficeFloor(t task.Task) string {
 		// Render each desk as a multi-line string
 		deskStrings := make([]string, len(rowAgents))
 		for i, a := range rowAgents {
+			globalIdx := rowStart + i
 			status := task.AgentStatus(t.Workspace, a.ID)
 			isDirector := a.ID == "director" || a.IsSynthesizer
 			var frame string
@@ -436,7 +474,8 @@ func (m Model) viewOfficeFloor(t task.Task) string {
 			} else {
 				frame = agentSpriteFrame(status, m.spriteIdx)
 			}
-			deskLines := renderDeskBox(a, status, frame, isDirector, deskW)
+			selected := globalIdx == m.multiAgentIdx
+			deskLines := renderDeskBox(a, status, frame, isDirector, deskW, selected)
 			deskStrings[i] = strings.Join(deskLines, "\n")
 		}
 
@@ -534,7 +573,7 @@ func (m Model) viewChatPanel(workspace, channelFile string, contentH int) string
 // viewChatInput renders the chat input bar (focused or hint mode).
 func (m Model) viewChatInput() string {
 	if !m.taskChatFocused {
-		return FooterStyle.Width(m.width).Render("f/i escribir  ←/→ canal  ↑↓ scroll  Enter agente  Esc volver  Ctrl+Q salir")
+		return FooterStyle.Width(m.width).Render("[/] agente  Enter docs  ←/→ canal  ↑↓ scroll  f/i escribir  Esc volver  Ctrl+Q salir")
 	}
 
 	buf := m.taskChatInput
