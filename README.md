@@ -67,7 +67,7 @@ greg cancel <task-id>                               # cancel a scheduled task
 ### Multi-agent tasks
 
 ```bash
-greg task run --goal "..." --agent "id:role" [--agent ...]
+greg task run --goal "..." --agent "id:role" [--agent ...] [--preset coding|research]
 greg task status <task-id>                # per-agent status, coordinator health, tmux state
 greg task list                            # all tasks with statuses
 greg peek <task-id> [-n 30]               # tail all agents at once
@@ -171,8 +171,11 @@ greg injects prompt templates (skills) into each agent to define their behavior:
 | `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent; exposes `send-msg`, `wait-msg`, `check-msgs` |
 | `greg-director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
 | `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
+| `greg-preset-coding.md` | Delegates to `greg-coding` — injected into agents when `--preset coding` is used |
+| `greg-coding` | `/greg-coding` — coding task rules: git workflow, build/test checklist, quality standards, cross-agent collaboration protocol |
 | `greg-task` | `/greg-task` — interactive skill to design and launch a multi-agent task |
 | `greg-learn` | `/greg-learn` — consolidate learnings from a conversation into persistent memory |
+| `coding/define-issue.md` | Guide for writing well-defined issues before handing them to a coding agent |
 
 ## Changelog
 

@@ -29,12 +29,40 @@ greg task run \
   --goal "<objetivo completo y concreto>" \
   --agent "<id>:<descripción del rol>" \
   --agent "<id>:<descripción del rol>" \
-  [--agent ...]
+  [--agent ...] \
+  [--preset coding|research] \
+  [--dir <path>] \
+  [--model <alias|id>]
 ```
 
 - `--goal` — requerido. Una oración que define qué debe producir la tarea.
 - `--agent` — uno o más especialistas. El director se agrega solo.
+- `--preset` — opcional. Inyecta instrucciones especializadas a todos los agentes (excepto el director). Valores válidos: `coding`, `research`.
 - `--dir` — opcional. Directorio de trabajo (default: `$GREG_VAULT` o `$HOME`).
+- `--model` — opcional. Alias o model ID. Aliases: `opus`, `sonnet`, `haiku`.
+
+---
+
+## Presets
+
+### `--preset coding`
+
+Úsalo cuando la tarea produce **código** que debe mergearse a un repositorio.
+
+Hace dos cosas automáticamente:
+
+1. **Crea un worktree git aislado** en `/tmp/greg-worktree-<task-id>` — los agentes trabajan ahí, nunca en el branch principal. El humano decide cuándo mergear.
+2. **Inyecta el skill `greg-coding`** en el rol de cada agente (excepto el director). Ese skill cubre: git workflow, checklist pre-done, estándares de calidad y protocolo de colaboración entre agentes.
+
+El skill inyectado vive en `~/Documents/greg/skills/greg-coding/SKILL.md`.
+
+### `--preset research`
+
+Úsalo cuando la tarea produce **análisis o síntesis** a partir de fuentes externas.
+
+Detecta el tipo de agente por palabras clave en el rol:
+- Roles con "recolect", "gather", "search", "busca" → reciben el skill de collector.
+- Roles con "analiz", "review", "critic", "evalúa", "sintetiz" → reciben el skill de analyzer.
 
 ---
 

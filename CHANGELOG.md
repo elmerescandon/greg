@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.6] - 2026-06-17
+
+### Changed
+
+**Skills**
+- `greg-preset-coding.md` — no longer contains the full coding instructions; now delegates to `greg-coding/SKILL.md` with a single read instruction; the skill is the source of truth
+- `greg-task/SKILL.md` — added full `--preset coding|research` documentation: what each preset does, when to use it, and which skill gets injected
+
+### Added
+
+**Skills**
+- `greg-coding/SKILL.md` — extracted from `greg-preset-coding.md`; structured as a proper invocable skill (`/greg-coding`); covers git workflow, build/test checklist, quality standards, and cross-agent collaboration protocol
+- `coding/define-issue.md` — guide for writing well-defined issues before handing work to a coding agent; focuses on the 82% failure mode that happens before the first line of code
+
 ## [0.4.5] - 2026-06-16
 
 ### Fixed
