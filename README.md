@@ -190,17 +190,27 @@ The Multiple view shows animated ASCII tamagotchi sprites per agent:
 
 ### Skills
 
-greg injects prompt templates (skills) into each agent to define their behavior:
+greg injects prompt templates (skills) into each agent to define their behavior.
+
+**Agent templates** — injected by the CLI into every task:
+
+| File | Purpose |
+|------|---------|
+| `agents/mailbox.md` | Workspace and messaging protocol — injected into every agent; exposes `send-msg`, `wait-msg`, `check-msgs` |
+| `agents/director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
+| `agents/teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
+
+**Invocable skills** — used by humans via `/skill-name`, also injected by presets:
 
 | Skill | Purpose |
 |-------|---------|
-| `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent; exposes `send-msg`, `wait-msg`, `check-msgs` |
-| `greg-director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
-| `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
-| `greg-coding` | Injected by `--preset coding`; also invocable as `/greg-coding` — git workflow, build/test checklist, quality standards, cross-agent collaboration protocol |
-| `greg-issue` | `/greg-issue` — guides writing a well-defined issue before handing it to a coding agent; asks one question at a time until the 5 minimum elements are clear |
-| `greg-task` | `/greg-task` — interactive skill to design and launch a multi-agent task |
-| `greg-learn` | `/greg-learn` — consolidate learnings from a conversation into persistent memory |
+| `coding/workflow` | Injected by `--preset coding` — git workflow, build/test checklist, quality standards, cross-agent collaboration |
+| `coding/issue` | Guide for writing a well-defined issue before handing it to a coding agent |
+| `research/collector` | Injected by `--preset research` for collector-role agents — raw evidence gathering protocol |
+| `research/analyzer` | Injected by `--preset research` for analyzer-role agents — workspace-only analysis, bias detection |
+| `human/greg-task` | Design and launch a multi-agent task |
+| `human/greg-learn` | Consolidate learnings from a conversation into persistent memory |
+| `human/greg-revise` | Revise and improve written content |
 
 ## Changelog
 

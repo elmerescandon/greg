@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.8] - 2026-06-17
+
+### Changed
+
+**Skills — reorganización completa de la carpeta**
+- `agents/` — plantillas internas del CLI: `director.md`, `teammate.md`, `mailbox.md`
+- `coding/workflow/` — extraído de `greg-coding`; inyectado por `--preset coding`
+- `coding/issue/` — extraído de `greg-issue`
+- `research/collector/` — extraído de `greg-preset-research-collector.md`; ahora skill propio con frontmatter
+- `research/analyzer/` — extraído de `greg-preset-research-analyzer.md`; ahora skill propio con frontmatter
+- `human/greg-task/`, `human/greg-learn/`, `human/greg-revise/` — skills de uso humano
+
+### Removed
+
+**Skills**
+- `greg-preset-coding.md`, `greg-preset-research-collector.md`, `greg-preset-research-analyzer.md` — el CLI ahora apunta directamente a los skills; los archivos de "redirección" ya no existen
+
+**CLI**
+- Rutas de skills actualizadas para reflejar la nueva estructura
+
 ## [0.4.7] - 2026-06-17
 
 ### Added

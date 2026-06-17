@@ -35,7 +35,7 @@ _resolve_skill() {
 
   # Read mailbox skill and inline it (resolve {{> greg-mailbox}})
   local mailbox_content
-  mailbox_content=$(cat "${SKILLS_DIR}/greg-mailbox.md")
+  mailbox_content=$(cat "${SKILLS_DIR}/agents/mailbox.md")
 
   local content
   content=$(cat "${skill_file}")
@@ -738,9 +738,9 @@ _task_run() {
     # Resolve skill template
     local skill_file
     if [[ "$aid" == "director" ]]; then
-      skill_file="${SKILLS_DIR}/greg-director.md"
+      skill_file="${SKILLS_DIR}/agents/director.md"
     else
-      skill_file="${SKILLS_DIR}/greg-teammate.md"
+      skill_file="${SKILLS_DIR}/agents/teammate.md"
     fi
 
     # ── PRESET: inyección de instrucciones en el rol del agente ───────────────
@@ -755,18 +755,18 @@ _task_run() {
       fi
     }
     if [[ "$preset" == "coding" && "$aid" != "director" ]]; then
-      local coding_skill="${SKILLS_DIR}/greg-preset-coding.md"
+      local coding_skill="${SKILLS_DIR}/coding/workflow/SKILL.md"
       local coding_content
       coding_content=$(_inject_preset_skill "$coding_skill" "$aid")
       [[ -n "$coding_content" ]] && effective_role="${effective_role}"$'\n\n'"${coding_content}"
     elif [[ "$preset" == "research" && "$aid" != "director" ]]; then
       if echo "$effective_role" | grep -qiE 'recolect|gather|search|busca'; then
-        local collector_skill="${SKILLS_DIR}/greg-preset-research-collector.md"
+        local collector_skill="${SKILLS_DIR}/research/collector/SKILL.md"
         local collector_content
         collector_content=$(_inject_preset_skill "$collector_skill" "$aid")
         [[ -n "$collector_content" ]] && effective_role="${effective_role}"$'\n\n'"${collector_content}"
       elif echo "$effective_role" | grep -qiE 'analiz|review|critic|evalúa|sintetiz'; then
-        local analyzer_skill="${SKILLS_DIR}/greg-preset-research-analyzer.md"
+        local analyzer_skill="${SKILLS_DIR}/research/analyzer/SKILL.md"
         local analyzer_content
         analyzer_content=$(_inject_preset_skill "$analyzer_skill" "$aid")
         [[ -n "$analyzer_content" ]] && effective_role="${effective_role}"$'\n\n'"${analyzer_content}"
