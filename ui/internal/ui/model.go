@@ -30,7 +30,35 @@ const (
 
 // gregConfig holds persistent user preferences.
 type gregConfig struct {
-	DarkMode bool `json:"dark_mode"`
+	DarkMode         bool   `json:"dark_mode"`
+	DefaultModel     string `json:"default_model"`
+	DefaultEffort    string `json:"default_effort"`
+	CompactWarnPct   int    `json:"compact_warn_pct"`
+	AutoCompact      bool   `json:"auto_compact"`
+	IdleTimeoutHours int    `json:"idle_timeout_hours"`
+}
+
+func defaultGregConfig() gregConfig {
+	return gregConfig{
+		DarkMode:         true,
+		DefaultModel:     "claude-sonnet-4-6",
+		DefaultEffort:    "high",
+		CompactWarnPct:   90,
+		AutoCompact:      false,
+		IdleTimeoutHours: 0,
+	}
+}
+
+func applyGregConfigDefaults(c *gregConfig) {
+	if c.DefaultModel == "" {
+		c.DefaultModel = "claude-sonnet-4-6"
+	}
+	if c.DefaultEffort == "" {
+		c.DefaultEffort = "high"
+	}
+	if c.CompactWarnPct == 0 {
+		c.CompactWarnPct = 90
+	}
 }
 
 func gregConfigPath() string {
@@ -41,12 +69,13 @@ func gregConfigPath() string {
 func loadGregConfig() gregConfig {
 	data, err := os.ReadFile(gregConfigPath())
 	if err != nil {
-		return gregConfig{DarkMode: true}
+		return defaultGregConfig()
 	}
 	var c gregConfig
 	if err := json.Unmarshal(data, &c); err != nil {
-		return gregConfig{DarkMode: true}
+		return defaultGregConfig()
 	}
+	applyGregConfigDefaults(&c)
 	return c
 }
 
@@ -109,7 +138,9 @@ type Model struct {
 	multiAgentScrollOffset int
 	multiDocIdx            int
 	multiDocSource         string // "workspace" or "messages"
-	darkMode               bool
+	cfg                   gregConfig
+	configCursorIdx       int
+	tickCount             int
 
 	// Task detail chat/office view
 	taskChatInput        string
@@ -158,7 +189,10 @@ func NewModel(vault string) Model {
 		tab = NewTab(name, active.ClaudeSession, active.ID)
 		if active.Model != "" {
 			tab.Model = active.Model
+		} else {
+			tab.Model = cfg.DefaultModel
 		}
+		tab.Effort = cfg.DefaultEffort
 		if active.ClaudeSession != "" {
 			entries := claude.LoadHistory(vault, active.ClaudeSession, 10)
 			tab.Lines = renderHistory(entries)
@@ -167,6 +201,8 @@ func NewModel(vault string) Model {
 		s, _ := session.Spawn(vault)
 		name := strings.TrimPrefix(s.ID, "greg-")
 		tab = NewTab(name, "", s.ID)
+		tab.Model = cfg.DefaultModel
+		tab.Effort = cfg.DefaultEffort
 	}
 
 	m := Model{
@@ -174,7 +210,7 @@ func NewModel(vault string) Model {
 		tabIdx:     0,
 		vault:      vault,
 		historyIdx: -1,
-		darkMode:   cfg.DarkMode,
+		cfg:        cfg,
 	}
 	return m
 }
@@ -214,6 +250,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.spriteTick == 0 {
 			m.spriteIdx = (m.spriteIdx + 1) % 4
 		}
+		m.tickCount++
+		if m.tickCount%62 == 0 {
+			m.checkIdleTimeout()
+		}
 		return m, tickCmd()
 
 	case claudeEventMsg:
@@ -243,6 +283,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if t.CompactPending && idx == m.tabIdx {
 				t.CompactPending = false
 				t.CompactWarned = false
+				if m.cfg.AutoCompact {
+					t.Lines = append(t.Lines, DimText.Render("⚡ compactando contexto automáticamente…"))
+					return m, m.send("/compact")
+				}
 				t.Lines = append(t.Lines, ErrorText.Render("⚡ contexto al límite — escribe qué quieres preservar y presiona Enter"))
 				t.InputBuf = "/compact "
 				t.CursorPos = len(t.InputBuf)
@@ -419,12 +463,20 @@ func (m *Model) handleEvent(tabIdx int, ev claude.Event) {
 					t.ContextTokens = used
 					t.ContextWindow = contextWindow
 
-					if t.ContextPct < 75 {
+					resetPct := m.cfg.CompactWarnPct - 15
+					if resetPct < 60 {
+						resetPct = 60
+					}
+					pendingPct := m.cfg.CompactWarnPct + 5
+					if pendingPct > 99 {
+						pendingPct = 99
+					}
+					if t.ContextPct < resetPct {
 						t.CompactWarned = false
 						t.CompactPending = false
-					} else if t.ContextPct >= 95 {
+					} else if t.ContextPct >= pendingPct {
 						t.CompactPending = true
-					} else if t.ContextPct >= 90 && !t.CompactWarned {
+					} else if t.ContextPct >= m.cfg.CompactWarnPct && !t.CompactWarned {
 						t.CompactWarned = true
 						t.Lines = append(t.Lines,
 							CtxMed.Render(fmt.Sprintf("⚠ contexto al %d%% — Ctrl+K para compactar", t.ContextPct)))
@@ -641,10 +693,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		s, _ := session.Spawn(m.vault)
 		name := strings.TrimPrefix(s.ID, "greg-")
 		newT := NewTab(name, "", s.ID)
+		newT.Model = m.cfg.DefaultModel
+		newT.Effort = m.cfg.DefaultEffort
 		m.tabs = append(m.tabs, newT)
 		m.tabIdx = len(m.tabs) - 1
-		t = m.tab()
-		m.showConfigSelection(t)
 		return m, nil
 
 	case "ctrl+w":
@@ -676,10 +728,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == ViewConfig {
 		switch k {
-		case "up", "down", " ", "enter":
-			m.darkMode = !m.darkMode
-			InitStyles(m.darkMode)
-			saveGregConfig(gregConfig{DarkMode: m.darkMode})
+		case "up":
+			if m.configCursorIdx > 0 {
+				m.configCursorIdx--
+			}
+		case "down":
+			if m.configCursorIdx < numConfigItems-1 {
+				m.configCursorIdx++
+			}
+		case "left":
+			m.cycleConfigItem(false)
+		case "right", " ", "enter":
+			m.cycleConfigItem(true)
 		case "escape":
 			m.viewMode = ViewMetricas
 		}
@@ -1303,7 +1363,10 @@ func (m Model) openSidebarSession() (tea.Model, tea.Cmd) {
 	newT := NewTab(name, s.ClaudeSession, s.ID)
 	if s.Model != "" {
 		newT.Model = s.Model
+	} else {
+		newT.Model = m.cfg.DefaultModel
 	}
+	newT.Effort = m.cfg.DefaultEffort
 	if s.ClaudeSession != "" {
 		entries := claude.LoadHistory(m.vault, s.ClaudeSession, 10)
 		newT.Lines = renderHistory(entries)
@@ -1338,6 +1401,108 @@ func (m Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) outputHeight() int {
 	// topBar=2  tabBar=1  statusBar=1  input=1  footer=1 → 6 rows overhead
 	return m.height - 6
+}
+
+const numConfigItems = 6
+
+func modelIdx(id string) int {
+	for i, mo := range ModelOptions {
+		if mo.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+func effortIdx(id string) int {
+	for i, eo := range EffortOptions {
+		if eo.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+func warnPctIdx(pct int, opts []int) int {
+	for i, o := range opts {
+		if o == pct {
+			return i
+		}
+	}
+	return len(opts) - 1
+}
+
+func timeoutIdx(hours int, opts []int) int {
+	for i, o := range opts {
+		if o == hours {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) cycleConfigItem(forward bool) {
+	step := 1
+	if !forward {
+		step = -1
+	}
+	switch m.configCursorIdx {
+	case 0:
+		m.cfg.DarkMode = !m.cfg.DarkMode
+		InitStyles(m.cfg.DarkMode)
+	case 1:
+		opts := ModelOptions
+		idx := (modelIdx(m.cfg.DefaultModel) + step + len(opts)) % len(opts)
+		m.cfg.DefaultModel = opts[idx].ID
+	case 2:
+		opts := EffortOptions
+		idx := (effortIdx(m.cfg.DefaultEffort) + step + len(opts)) % len(opts)
+		m.cfg.DefaultEffort = opts[idx].ID
+	case 3:
+		warnPcts := []int{75, 80, 85, 90}
+		idx := (warnPctIdx(m.cfg.CompactWarnPct, warnPcts) + step + len(warnPcts)) % len(warnPcts)
+		m.cfg.CompactWarnPct = warnPcts[idx]
+	case 4:
+		m.cfg.AutoCompact = !m.cfg.AutoCompact
+	case 5:
+		timeouts := []int{0, 4, 8, 24}
+		idx := (timeoutIdx(m.cfg.IdleTimeoutHours, timeouts) + step + len(timeouts)) % len(timeouts)
+		m.cfg.IdleTimeoutHours = timeouts[idx]
+	}
+	saveGregConfig(m.cfg)
+}
+
+func (m *Model) checkIdleTimeout() {
+	if m.cfg.IdleTimeoutHours <= 0 {
+		return
+	}
+	openIDs := map[string]bool{}
+	for _, t := range m.tabs {
+		if t.GregSessionID != "" {
+			openIDs[t.GregSessionID] = true
+		}
+	}
+	sessions, err := session.LoadSessions()
+	if err != nil {
+		return
+	}
+	threshold := time.Now().Add(-time.Duration(m.cfg.IdleTimeoutHours) * time.Hour)
+	var toArchive []string
+	for _, s := range sessions {
+		if openIDs[s.ID] {
+			continue
+		}
+		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
+		if err != nil {
+			continue
+		}
+		if t.Before(threshold) {
+			toArchive = append(toArchive, s.ID)
+		}
+	}
+	if len(toArchive) > 0 {
+		session.ArchiveTaskSessions(toArchive)
+	}
 }
 
 // tabAtX returns the tab index at the given X column in the tab bar, or -1.

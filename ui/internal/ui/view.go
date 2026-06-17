@@ -264,39 +264,7 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	return selector + coloredBullet + TaskRowDim.Render(rowPrefix+goal)
 }
 
-// listLogFiles returns sorted log filenames in the workspace root (coordinator.log, etc.).
-func listLogFiles(workspace string) []string {
-	entries, err := os.ReadDir(workspace)
-	if err != nil {
-		return nil
-	}
-	var logs []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".log") {
-			logs = append(logs, e.Name())
-		}
-	}
-	sort.Strings(logs)
-	return logs
-}
-
-// listWorkspaceDocs returns sorted .md filenames inside workspace/workspace/.
-func listWorkspaceDocs(workspace string) []string {
-	entries, err := os.ReadDir(workspace + "/workspace")
-	if err != nil {
-		return nil
-	}
-	var docs []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			docs = append(docs, e.Name())
-		}
-	}
-	sort.Strings(docs)
-	return docs
-}
-
-func (m Model) viewAgentOutput(t task.Task, _ task.Agent) string {
+func (m Model) viewAgentOutput_DELETED(t task.Task, _ task.Agent) string {
 	h := m.height - 2
 	headerH := 2
 	footerH := 2
@@ -1568,27 +1536,85 @@ func (m Model) viewConfig() string {
 	lines = append(lines, "  "+SectionHeader.Render("⚙  Configuración"))
 	lines = append(lines, "  "+SepDim.Render(strings.Repeat("─", m.width-4)))
 	lines = append(lines, "")
-	lines = append(lines, "  "+ModelStyle.Render("Tema"))
-	lines = append(lines, "")
 
-	darkLabel := "  Dark mode    oscuro — navy + cyan"
-	lightLabel := "  Light mode   claro — Gruvbox warm"
-
-	if m.darkMode {
-		lines = append(lines, "    "+ViewActive.Render("▶")+" "+QuestionLabel.Render(darkLabel))
-		lines = append(lines, "      "+QuestionLabelDim.Render(lightLabel))
-	} else {
-		lines = append(lines, "      "+QuestionLabelDim.Render(darkLabel))
-		lines = append(lines, "    "+ViewActive.Render("▶")+" "+QuestionLabel.Render(lightLabel))
+	renderItem := func(idx int, label, value, desc string) string {
+		cursor := "  "
+		if m.configCursorIdx == idx {
+			cursor = ViewActive.Render("▶") + " "
+		}
+		var valueStr string
+		if m.configCursorIdx == idx {
+			valueStr = QuestionLabel.Render(value)
+		} else {
+			valueStr = QuestionLabelDim.Render(value)
+		}
+		descStr := ""
+		if desc != "" {
+			descStr = "   " + DimText.Render(desc)
+		}
+		return "  " + cursor + ModelStyle.Render(fmt.Sprintf("%-22s", label)) + " " + valueStr + descStr
 	}
 
+	// 0: Tema
+	themeVal, themeDesc := "Dark mode", "oscuro — navy + cyan"
+	if !m.cfg.DarkMode {
+		themeVal, themeDesc = "Light mode", "claro — Gruvbox warm"
+	}
+	lines = append(lines, renderItem(0, "Tema", themeVal, themeDesc))
 	lines = append(lines, "")
+
+	// 1: Modelo por defecto
+	modelLabel, modelDesc := m.cfg.DefaultModel, ""
+	for _, mo := range ModelOptions {
+		if mo.ID == m.cfg.DefaultModel {
+			modelLabel = mo.Label
+			modelDesc = mo.Desc
+			break
+		}
+	}
+	lines = append(lines, renderItem(1, "Modelo por defecto", modelLabel, modelDesc))
+
+	// 2: Esfuerzo por defecto
+	effortLabel, effortDesc := m.cfg.DefaultEffort, ""
+	for _, eo := range EffortOptions {
+		if eo.ID == m.cfg.DefaultEffort {
+			effortLabel = eo.Label
+			effortDesc = eo.Desc
+			break
+		}
+	}
+	lines = append(lines, renderItem(2, "Esfuerzo por defecto", effortLabel, effortDesc))
+	lines = append(lines, "")
+
+	// 3: Umbral compactación
+	warnStr := fmt.Sprintf("%d%%", m.cfg.CompactWarnPct)
+	lines = append(lines, renderItem(3, "Umbral compactación", warnStr, fmt.Sprintf("avisa · compacta al %d%%", m.cfg.CompactWarnPct+5)))
+
+	// 4: Auto-compact
+	autoStr := "desactivado"
+	if m.cfg.AutoCompact {
+		autoStr = "activado"
+	}
+	lines = append(lines, renderItem(4, "Auto-compact", autoStr, ""))
+	lines = append(lines, "")
+
+	// 5: Timeout idle
+	timeoutStr := "nunca"
+	switch m.cfg.IdleTimeoutHours {
+	case 4:
+		timeoutStr = "4 horas"
+	case 8:
+		timeoutStr = "8 horas"
+	case 24:
+		timeoutStr = "24 horas"
+	}
+	lines = append(lines, renderItem(5, "Timeout idle", timeoutStr, "sesiones sin abrir se archivan"))
 
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
 
-	hint := "↑/↓  cambiar tema  Esc  volver  Ctrl+Q  salir"
+	hint := "↑/↓ navegar  ←/→ cambiar  Esc volver  Ctrl+Q salir"
 	lines = append(lines, FooterStyle.Width(m.width).Render(hint))
 
 	if len(lines) > h {
