@@ -228,14 +228,23 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 
 	dateStr := formatTaskDate(t.Created)
 
+	// Reserve 2 visual chars for preset tag ("⌨ ")
+	tagLen := 0
+	if t.Preset == "coding" {
+		tagLen = 2
+	}
 	goal := t.Goal
-	if len(goal) > goalW {
-		goal = goal[:goalW-1] + "…"
+	if len(goal) > goalW-tagLen {
+		goal = goal[:goalW-tagLen-1] + "…"
 	}
 
 	if selected {
-		line := fmt.Sprintf("%s● %-*s  %-*s  %-*s  %s",
-			selector, statusW, status, idW, tid, dateW, dateStr, goal)
+		presetStr := ""
+		if t.Preset == "coding" {
+			presetStr = "⌨ "
+		}
+		line := fmt.Sprintf("%s● %-*s  %-*s  %-*s  %s%s",
+			selector, statusW, status, idW, tid, dateW, dateStr, presetStr, goal)
 		return TaskRowSelected.Width(m.width).Render(line)
 	}
 
@@ -248,9 +257,27 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	default:
 		coloredBullet = DimText.Render("◌")
 	}
-	rest := fmt.Sprintf(" %-*s  %-*s  %-*s  %s",
-		statusW, status, idW, tid, dateW, dateStr, goal)
-	return selector + coloredBullet + TaskRowDim.Render(rest)
+	rowPrefix := fmt.Sprintf(" %-*s  %-*s  %-*s  ", statusW, status, idW, tid, dateW, dateStr)
+	if t.Preset == "coding" {
+		return selector + coloredBullet + TaskRowDim.Render(rowPrefix) + StatusYellow.Render("⌨") + " " + TaskRowDim.Render(goal)
+	}
+	return selector + coloredBullet + TaskRowDim.Render(rowPrefix+goal)
+}
+
+// listLogFiles returns sorted log filenames in the workspace root (coordinator.log, etc.).
+func listLogFiles(workspace string) []string {
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return nil
+	}
+	var logs []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".log") {
+			logs = append(logs, e.Name())
+		}
+	}
+	sort.Strings(logs)
+	return logs
 }
 
 // listWorkspaceDocs returns sorted .md filenames inside workspace/workspace/.
@@ -286,6 +313,10 @@ func (m Model) viewAgentOutput(t task.Task, _ task.Agent) string {
 		docs = listMsgChannels(t.Workspace)
 		fileDir = t.Workspace + "/messages/"
 		sourceLabel = "messages"
+	} else if m.multiDocSource == "logs" {
+		docs = listLogFiles(t.Workspace)
+		fileDir = t.Workspace + "/"
+		sourceLabel = "logs"
 	} else {
 		docs = listWorkspaceDocs(t.Workspace)
 		fileDir = t.Workspace + "/workspace/"
@@ -407,7 +438,7 @@ func countMsgsInFile(path string) int {
 // renderNetworkGraph draws an ASCII graph of agent communication for the given task.
 // selectedChannel is the basename of the currently selected messages/*.md file.
 // Returns a slice of lines of width w.
-func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, w, h int) []string {
+func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChannel string, w, h int) []string {
 	if w < 10 {
 		w = 10
 	}
@@ -477,63 +508,73 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 	sort.Strings(workers)
 
 	// Helper: truncate agent label to fit box
-	const maxLabelW = 12
+	const maxLabelW = 10
 	label := func(id string) string {
-		if len(id) > maxLabelW {
-			return id[:maxLabelW-1] + "…"
+		runes := []rune(id)
+		if len(runes) > maxLabelW {
+			return string(runes[:maxLabelW-1]) + "…"
 		}
 		return id
 	}
-
-	// Box drawing: "╔═══════╗" / "║ label ║" / "╚═══════╝"
-	boxLines := func(id string, selected bool) []string {
+	padLabel := func(id string) string {
 		lbl := label(id)
-		inner := " " + lbl + " "
-		top := "╔" + strings.Repeat("═", len(inner)) + "╗"
-		mid := "║" + inner + "║"
-		bot := "╚" + strings.Repeat("═", len(inner)) + "╝"
-		if selected {
-			return []string{
-				SepActive.Render(top),
-				SepActive.Render(mid),
-				SepActive.Render(bot),
-			}
+		runes := []rune(lbl)
+		for len(runes) < maxLabelW {
+			runes = append(runes, ' ')
 		}
-		return []string{top, mid, bot}
+		return string(runes)
+	}
+	// inner visual width: " " + bullet(1) + " " + label(maxLabelW) + " " = maxLabelW+4 = 14
+	const innerW = maxLabelW + 4
+
+	// Box drawing with animated status bullet
+	boxLines := func(id string, selected bool) []string {
+		status := task.AgentStatus(t.Workspace, id)
+		padded := padLabel(id)
+
+		var bulletChar string
+		switch status {
+		case "done", "completed":
+			bulletChar = "✔"
+		case "working":
+			bulletChar = spinFrames[m.spinIdx]
+		default:
+			bulletChar = "◌"
+		}
+
+		topRaw := "╔" + strings.Repeat("═", innerW) + "╗"
+		botRaw := "╚" + strings.Repeat("═", innerW) + "╝"
+
+		if selected {
+			mid := SepActive.Render("║") + " " + SepActive.Render(bulletChar) + " " + ViewActive.Render(padded) + " " + SepActive.Render("║")
+			return []string{SepActive.Render(topRaw), mid, SepActive.Render(botRaw)}
+		}
+
+		var bStyle, borderStyle lipgloss.Style
+		switch status {
+		case "done", "completed":
+			bStyle = StatusGreen
+			borderStyle = StatusGreen
+		case "working":
+			bStyle = StatusYellow
+			borderStyle = StatusYellow
+		default:
+			bStyle = DimText
+			borderStyle = DimText
+		}
+		mid := borderStyle.Render("║") + " " + bStyle.Render(bulletChar) + " " + DimText.Render(padded) + " " + borderStyle.Render("║")
+		return []string{borderStyle.Render(topRaw), mid, borderStyle.Render(botRaw)}
 	}
 
-	// Status bullet next to director
-	directorStatus := task.AgentStatus(t.Workspace, "director")
-	var dirBullet string
-	switch directorStatus {
-	case "done", "completed":
-		dirBullet = StatusGreen.Render("✔")
-	case "working":
-		dirBullet = StatusYellow.Render("◉")
-	default:
-		dirBullet = DimText.Render("◌")
-	}
-
-	// Build output lines
+	// Build output lines — title/status shown in the parent view header, not here
 	var lines []string
-
-	// Title line
-	statusStr := t.CoordinatorStatus
-	if statusStr == "" {
-		statusStr = "—"
-	}
-	title := fmt.Sprintf("  COMUNICACIÓN — %s   %s %s", t.TaskID, dirBullet, DimText.Render(statusStr))
-	lines = append(lines, title)
 	lines = append(lines, "")
 
 	// Row 0: human (if present) → director
 	dirBox := boxLines("director", false)
-	dirBoxW := len("╔") + 2 + len(label("director")) + len("╗") // 2 = spaces around label
-	// Actually compute from the string
-	dirBoxW = len([]rune(strings.ReplaceAll(dirBox[0], "\x1b[", "")))
-	// Use a simpler approach: just measure the raw string without ANSI
-	rawDirTop := "╔" + strings.Repeat("═", len(" "+label("director")+" ")) + "╗"
-	dirBoxW = len([]rune(rawDirTop))
+	// boxW = "╔" + "═"*innerW + "╗" = innerW+2 = 16 visual chars
+	rawDirTop := "╔" + strings.Repeat("═", innerW) + "╗"
+	dirBoxW := len([]rune(rawDirTop))
 
 	humanLine := ""
 	if hasHuman {
@@ -577,8 +618,16 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 
 	// Build arrow lines from director to each worker
 	// Each worker gets a column slot
-	const workerBoxW = 14 // "╔════════════╗" = 14 chars for 12-char label
-	const workerGap = 2
+	const workerBoxW = innerW + 2 // "╔" + "═"*innerW + "╗" = 16 visual chars
+
+	// Spread workers to fill ~70% of terminal width
+	workerGap := 3
+	if len(workers) > 1 {
+		idealGap := (w*7/10 - len(workers)*workerBoxW) / (len(workers) - 1)
+		if idealGap > workerGap {
+			workerGap = idealGap
+		}
+	}
 
 	totalWorkerW := len(workers)*workerBoxW + (len(workers)-1)*workerGap
 	workerLeft := (w - totalWorkerW) / 2
@@ -608,15 +657,7 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 		return 0, ""
 	}
 
-	// Arrow rows: we draw 2 rows of arrows between director and workers
-	// Row A: count label   Row B: │ char
-	arrowRowA := make([]byte, w)
-	arrowRowB := make([]byte, w)
-	for i := range arrowRowA {
-		arrowRowA[i] = ' '
-		arrowRowB[i] = ' '
-	}
-
+	// Build arrow segments: one per director↔worker edge
 	type arrowSeg struct {
 		x       int
 		countS  string
@@ -624,131 +665,128 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 		workerI int
 	}
 	var arrowSegs []arrowSeg
-
 	for i, wid := range workers {
 		cx := workerCenterX[i]
 		count, ch := msgCount("director", wid)
-		countS := ""
+		countS := "·"
 		if count > 0 {
-			countS = fmt.Sprintf("%d↓", count)
-		} else {
-			countS = "↓"
+			countS = fmt.Sprintf("%d", count)
 		}
 		arrowSegs = append(arrowSegs, arrowSeg{x: cx, countS: countS, ch: ch, workerI: i})
 	}
 
-	// Build the arrow lines as rendered strings (can't use byte arrays with ANSI)
-	// Instead build position-aware rendering
-	arrowLineA := pad(w) // placeholder
-	arrowLineB := pad(w)
-
-	// We'll build them character by character using a rune slice
-	runeA := []rune(strings.Repeat(" ", w))
-	runeB := []rune(strings.Repeat(" ", w))
-	_ = arrowRowA
-	_ = arrowRowB
-
-	for _, seg := range arrowSegs {
-		isSelected := (seg.ch == selectedChannel)
-		cs := []rune(seg.countS)
-		startA := seg.x - len(cs)/2
-		for j, r := range cs {
-			pos := startA + j
-			if pos >= 0 && pos < w {
-				runeA[pos] = r
+	// buildArrowPipe renders │ (or ┃ for selected) at each worker X position.
+	buildArrowPipe := func() string {
+		runeB := []rune(strings.Repeat(" ", w))
+		var parts []string
+		last := 0
+		for _, seg := range arrowSegs {
+			isSelected := seg.ch == selectedChannel
+			bx := seg.x
+			if bx > last {
+				parts = append(parts, string(runeB[last:bx]))
 			}
+			if isSelected {
+				parts = append(parts, SepActive.Render("┃"))
+			} else {
+				parts = append(parts, DimText.Render("│"))
+			}
+			last = bx + 1
 		}
-		arrowChar := '│'
-		if isSelected {
-			arrowChar = '┃'
+		if last < w {
+			parts = append(parts, string(runeB[last:]))
 		}
-		if seg.x >= 0 && seg.x < w {
-			runeB[seg.x] = arrowChar
-		}
-		_ = isSelected
+		return strings.Join(parts, "")
 	}
 
-	// Now render with color for selected
-	// We need to apply SepActive to selected arrows — build by scanning segs
-	var arrowAparts []string
-	var arrowBparts []string
-	lastA, lastB := 0, 0
-	for _, seg := range arrowSegs {
-		isSelected := (seg.ch == selectedChannel)
-		cs := []rune(seg.countS)
-		startA := seg.x - len(cs)/2
-
-		// plain text up to startA
-		if startA > lastA {
-			arrowAparts = append(arrowAparts, string(runeA[lastA:startA]))
+	// buildCountLine renders message counts centered at each worker X position.
+	buildCountLine := func() string {
+		runeBase := []rune(strings.Repeat(" ", w))
+		var parts []string
+		last := 0
+		for _, seg := range arrowSegs {
+			isSelected := seg.ch == selectedChannel
+			cs := []rune(seg.countS)
+			start := seg.x - len(cs)/2
+			for j, r := range cs {
+				if pos := start + j; pos >= 0 && pos < w {
+					runeBase[pos] = r
+				}
+			}
+			if start > last {
+				parts = append(parts, string(runeBase[last:start]))
+			}
+			if isSelected {
+				parts = append(parts, SepActive.Render(seg.countS))
+			} else {
+				parts = append(parts, DimText.Render(seg.countS))
+			}
+			last = start + len(cs)
 		}
-		rendered := seg.countS
-		if isSelected {
-			rendered = SepActive.Render(seg.countS)
-		} else {
-			rendered = DimText.Render(seg.countS)
+		if last < w {
+			parts = append(parts, string(runeBase[last:]))
 		}
-		arrowAparts = append(arrowAparts, rendered)
-		lastA = startA + len(cs)
-
-		// arrow B
-		bx := seg.x
-		if bx > lastB {
-			arrowBparts = append(arrowBparts, string(runeB[lastB:bx]))
-		}
-		arrowChar := "│"
-		if isSelected {
-			arrowChar = SepActive.Render("┃")
-		} else {
-			arrowChar = DimText.Render("│")
-		}
-		arrowBparts = append(arrowBparts, arrowChar)
-		lastB = bx + 1
+		return strings.Join(parts, "")
 	}
-	if lastA < w {
-		arrowAparts = append(arrowAparts, string(runeA[lastA:]))
-	}
-	if lastB < w {
-		arrowBparts = append(arrowBparts, string(runeB[lastB:]))
-	}
-	arrowLineA = strings.Join(arrowAparts, "")
-	arrowLineB = strings.Join(arrowBparts, "")
 
-	// Draw a horizontal line connecting from directorCenterX to each worker column
-	// Only if workers are spread out — draw a simple ↓ line if only one worker
+	// dirDropLine: │ straight down from director bottom to horizontal bar
+	{
+		runeD := []rune(strings.Repeat(" ", w))
+		if dirCenterX >= 0 && dirCenterX < w {
+			runeD[dirCenterX] = '│'
+		}
+		lines = append(lines, DimText.Render(string(runeD)))
+	}
+
+	// connLine: horizontal bar connecting director to workers
+	// Layout: └─┬─┬─┘  or  │  (single worker straight-through)
 	var connLine string
 	if len(workers) == 1 {
 		cx := workerCenterX[0]
 		runeC := []rune(strings.Repeat(" ", w))
-		runeC[cx] = '↓'
-		connLine = string(runeC)
+		if dirCenterX == cx {
+			runeC[cx] = '│'
+		} else {
+			minX, maxX := dirCenterX, cx
+			if minX > maxX {
+				minX, maxX = maxX, minX
+			}
+			for x := minX; x <= maxX; x++ {
+				runeC[x] = '─'
+			}
+			if dirCenterX < cx {
+				runeC[dirCenterX] = '└'
+				runeC[cx] = '┬'
+			} else {
+				runeC[dirCenterX] = '┘'
+				runeC[cx] = '┬'
+			}
+		}
+		connLine = DimText.Render(string(runeC))
 	} else {
-		// Draw horizontal bar connecting all arrows, with ↓ at worker positions
-		// Find leftmost and rightmost worker center
 		leftCX := workerCenterX[0]
 		rightCX := workerCenterX[len(workerCenterX)-1]
 		runeC := []rune(strings.Repeat(" ", w))
-		// Vertical drop from director
-		if dirCenterX >= 0 && dirCenterX < w {
-			runeC[dirCenterX] = '┬'
-		}
-		// Horizontal bar
 		for x := leftCX; x <= rightCX; x++ {
 			if x >= 0 && x < w {
-				if runeC[x] == ' ' {
-					runeC[x] = '─'
-				}
+				runeC[x] = '─'
 			}
 		}
-		// ↓ at each worker
+		// ┬ at each worker (T-junction going down)
 		for _, cx := range workerCenterX {
 			if cx >= 0 && cx < w {
-				runeC[cx] = '↓'
+				runeC[cx] = '┬'
 			}
 		}
-		// Connect director to horizontal bar
-		if dirCenterX < leftCX {
-			for x := dirCenterX; x <= leftCX; x++ {
+		// Director junction
+		if dirCenterX >= leftCX && dirCenterX <= rightCX {
+			if runeC[dirCenterX] == '┬' {
+				runeC[dirCenterX] = '┼'
+			} else {
+				runeC[dirCenterX] = '┬'
+			}
+		} else if dirCenterX < leftCX {
+			for x := dirCenterX; x < leftCX; x++ {
 				if x >= 0 && x < w && runeC[x] == ' ' {
 					runeC[x] = '─'
 				}
@@ -756,8 +794,8 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 			if dirCenterX >= 0 && dirCenterX < w {
 				runeC[dirCenterX] = '└'
 			}
-		} else if dirCenterX > rightCX {
-			for x := rightCX; x <= dirCenterX; x++ {
+		} else {
+			for x := rightCX + 1; x <= dirCenterX; x++ {
 				if x >= 0 && x < w && runeC[x] == ' ' {
 					runeC[x] = '─'
 				}
@@ -769,23 +807,18 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 		connLine = DimText.Render(string(runeC))
 	}
 
-	lines = append(lines, arrowLineA)
-	lines = append(lines, arrowLineB)
+	// Order: dirDropLine (already appended) → connLine → │ → counts → │ → workers
 	lines = append(lines, connLine)
+	lines = append(lines, buildArrowPipe())
+	lines = append(lines, buildCountLine())
+	lines = append(lines, buildArrowPipe())
 
-	// Worker boxes row
-	workerBox0 := make([]string, len(workers)) // top
-	workerBox1 := make([]string, len(workers)) // mid
-	workerBox2 := make([]string, len(workers)) // bot
+	// Worker boxes — highlighted if their edge is selected
+	workerBox0 := make([]string, len(workers))
+	workerBox1 := make([]string, len(workers))
+	workerBox2 := make([]string, len(workers))
 	for i, wid := range workers {
 		isSelected := false
-		for _, seg := range arrowSegs {
-			if seg.workerI == i && seg.ch == selectedChannel {
-				isSelected = true
-				break
-			}
-		}
-		// Also check if there's an edge from worker to director that matches selectedChannel
 		for _, e := range edges {
 			if (e.from == wid || e.to == wid) && e.channel == selectedChannel {
 				isSelected = true
@@ -822,13 +855,14 @@ func renderNetworkGraph(t task.Task, channels []string, selectedChannel string, 
 	return lines
 }
 
-// viewNetworkDetail replaces viewTaskDetail at Level 2.
-// Left panel (2/3): network graph. Right panel (1/3): selected channel thread.
+// viewNetworkDetail — full-width animated network graph view.
+// Tab/←/→ navigates edges (channels). Enter opens the selected channel full-screen.
 func (m Model) viewNetworkDetail(t task.Task) string {
 	h := m.height - 2
 	headerH := 2
-	footerH := 2
-	contentH := h - headerH - footerH
+	edgeBarH := 2 // edge info line + its separator
+	footerH := 3  // chat-input + sep + footer-hint
+	contentH := h - headerH - edgeBarH - footerH
 	if contentH < 3 {
 		contentH = 3
 	}
@@ -837,8 +871,34 @@ func (m Model) viewNetworkDetail(t task.Task) string {
 	if statusLabel == "" {
 		statusLabel = "—"
 	}
-	breadcrumb := fmt.Sprintf("← Agente / %s  [%s]", t.TaskID, statusLabel)
-	header1 := " " + ViewActive.Render(breadcrumb)
+
+	// Live agent summary for header
+	agents := task.AllAgents(t)
+	nWorking := 0
+	nDone := 0
+	for _, a := range agents {
+		switch task.AgentStatus(t.Workspace, a.ID) {
+		case "working":
+			nWorking++
+		case "done", "completed":
+			nDone++
+		}
+	}
+	var agentSummary string
+	switch {
+	case nWorking > 0:
+		agentSummary = "  " + StatusYellow.Render(spinFrames[m.spinIdx]+" "+fmt.Sprintf("%d activos", nWorking))
+		if len(agents) > nWorking {
+			agentSummary += DimText.Render(fmt.Sprintf(" · %d total", len(agents)))
+		}
+	case len(agents) > 0 && nDone == len(agents):
+		agentSummary = "  " + StatusGreen.Render(fmt.Sprintf("✔ %d completados", nDone))
+	case len(agents) > 0:
+		agentSummary = "  " + DimText.Render(fmt.Sprintf("%d agentes", len(agents)))
+	}
+
+	breadcrumb := fmt.Sprintf("← Agente / %s", t.TaskID)
+	header1 := " " + ViewActive.Render(breadcrumb) + "  " + DimText.Render("["+statusLabel+"]") + agentSummary
 	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
 
 	channels := listMsgChannels(t.Workspace)
@@ -846,60 +906,85 @@ func (m Model) viewNetworkDetail(t task.Task) string {
 	if len(channels) > 0 {
 		activeCh = m.activeMsgChannel % len(channels)
 	}
-
 	selectedChannel := ""
 	if activeCh < len(channels) {
 		selectedChannel = channels[activeCh]
 	}
 
-	// Panel widths
-	graphW := (m.width * 2) / 3
-	divW := 1
-	threadW := m.width - graphW - divW
-	if threadW < 20 {
-		threadW = 20
-		graphW = m.width - threadW - divW
+	// Full-width network graph
+	graphLines := m.renderNetworkGraph(t, channels, selectedChannel, m.width-2, contentH)
+
+	// Edge info bar
+	edgeSep := " " + SepDim.Render(strings.Repeat("─", m.width-2))
+	edgeInfo := m.renderEdgeInfo(t, selectedChannel, channels, activeCh)
+
+	// Chat input + footer
+	hint := "Tab/←/→ canal   Enter leer canal   o workspace agente   l logs   f/i escribir   Esc volver   Ctrl+Q salir"
+
+	var all []string
+	all = append(all, header1, header2)
+	for _, gl := range graphLines {
+		all = append(all, " "+gl)
 	}
-
-	// Left panel: network graph
-	graphLines := renderNetworkGraph(t, channels, selectedChannel, graphW, contentH)
-
-	// Right panel: thread of selected channel
-	threadLines := m.buildNetworkThreadPanel(t, selectedChannel, threadW, contentH)
-
-	div := SepDim.Render("│")
-	var bodyLines []string
-	for i := 0; i < contentH; i++ {
-		var l, r string
-		if i < len(graphLines) {
-			l = graphLines[i]
-		}
-		if i < len(threadLines) {
-			r = threadLines[i]
-		}
-		bodyLines = append(bodyLines, lipgloss.NewStyle().Width(graphW).Render(l)+div+r)
-	}
-
-	// Chat input line
-	chatInput := m.viewNetworkChatInput()
-
-	// Footer
-	footerHint := "Tab/←/→ canal   Enter leer completo   o output agente   f/i escribir al director   Esc volver   Ctrl+Q salir"
-	footer := " " + SepDim.Render(strings.Repeat("─", m.width-2)) + "\n" +
-		FooterStyle.Width(m.width).Render(footerHint)
-
-	all := []string{header1, header2}
-	all = append(all, bodyLines...)
-	all = append(all, chatInput)
+	all = append(all, edgeSep, edgeInfo)
+	all = append(all, m.viewNetworkChatInput())
 	all = append(all, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	all = append(all, FooterStyle.Width(m.width).Render(footerHint))
+	all = append(all, FooterStyle.Width(m.width).Render(hint))
 
-	// Trim to height
 	if len(all) > h {
 		all = all[:h]
 	}
-	_ = footer
 	return strings.Join(all, "\n")
+}
+
+// renderEdgeInfo renders the edge info bar showing the selected channel and message count.
+func (m Model) renderEdgeInfo(t task.Task, selectedChannel string, channels []string, activeCh int) string {
+	if len(channels) == 0 || selectedChannel == "" {
+		return FooterStyle.Width(m.width).Render("  sin canales de comunicación")
+	}
+
+	chName := strings.TrimSuffix(selectedChannel, ".md")
+	count := countMsgsInFile(t.Workspace + "/messages/" + selectedChannel)
+
+	var countStr string
+	switch count {
+	case 0:
+		countStr = DimText.Render("sin mensajes")
+	case 1:
+		countStr = ViewActive.Render("1 mensaje")
+	default:
+		countStr = ViewActive.Render(fmt.Sprintf("%d mensajes", count))
+	}
+
+	pos := DimText.Render(fmt.Sprintf("[%d/%d]", activeCh+1, len(channels)))
+
+	// Pulse animation when one of the channel's agents is working
+	pulse := ""
+	chBase := strings.TrimSuffix(selectedChannel, ".md")
+	var from, to string
+	if idx := strings.Index(chBase, "→"); idx >= 0 {
+		from = chBase[:idx]
+		to = chBase[idx+len("→"):]
+	} else if idx := strings.Index(chBase, "->"); idx >= 0 {
+		from = chBase[:idx]
+		to = chBase[idx+2:]
+	}
+	if from != "" || to != "" {
+		fs := task.AgentStatus(t.Workspace, from)
+		ts := task.AgentStatus(t.Workspace, to)
+		if fs == "working" || ts == "working" {
+			pulse = "  " + StatusYellow.Render(spinFrames[m.spinIdx]+" activo")
+		}
+	}
+
+	line := fmt.Sprintf("  ❯ %s  %s  %s%s    %s",
+		ViewActive.Render(chName),
+		countStr,
+		pos,
+		pulse,
+		DimText.Render("Enter para leer completo"),
+	)
+	return FooterStyle.Width(m.width).Render(line)
 }
 
 // buildNetworkThreadPanel renders the right-side thread panel for the selected channel.

@@ -82,6 +82,7 @@ type Task struct {
 	CoordinatorStatus string  `json:"coordinator_status"`
 	SynthesizerID     string  `json:"synthesizer_id,omitempty"`
 	SchemaVersion     int     `json:"schema_version,omitempty"` // 0/1 = legacy (with synthesizer), 2+ = no synthesizer
+	Preset            string  `json:"preset,omitempty"`
 	Agents            []Agent `json:"agents"`
 }
 

@@ -705,8 +705,9 @@ _task_run() {
     --arg goal     "$goal" \
     --arg workspace "$workspace" \
     --arg created  "$(_now)" \
+    --arg preset   "$preset" \
     --argjson agents "$agents_json" \
-    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents}' \
+    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents, preset: $preset}' \
     > "${workspace}/manifest.json"
 
   # Save multi-task metadata
@@ -715,8 +716,9 @@ _task_run() {
     --arg goal      "$goal" \
     --arg workspace "$workspace" \
     --arg created   "$(_now)" \
+    --arg preset    "$preset" \
     --argjson agents "$agents_json" \
-    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents, coordinator_status: "running", schema_version: 2}' \
+    '{task_id: $task_id, goal: $goal, workspace: $workspace, created: $created, agents: $agents, preset: $preset, coordinator_status: "running", schema_version: 2}' \
     > "${MULTI_TASKS_DIR}/${task_id}.json"
 
   echo "task     ${task_id}"

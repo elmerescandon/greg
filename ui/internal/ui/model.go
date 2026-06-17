@@ -942,6 +942,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						m.multiAgentScrollOffset = 0
 					}
 				}
+			case "l":
+				// Open coordinator.log in full-screen viewer
+				if curTask != nil {
+					logs := listLogFiles(curTask.Workspace)
+					if len(logs) > 0 {
+						m.multiDocSource = "logs"
+						m.multiDocIdx = 0
+						m.multiAgentView = true
+						m.multiAgentScrollOffset = 0
+					}
+				}
 			case "x":
 				if curTask != nil {
 					agents := task.AllAgents(*curTask)
