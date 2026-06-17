@@ -264,7 +264,39 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	return selector + coloredBullet + TaskRowDim.Render(rowPrefix+goal)
 }
 
-func (m Model) viewAgentOutput_DELETED(t task.Task, _ task.Agent) string {
+// listLogFiles returns sorted log filenames in the workspace root (coordinator.log, etc.).
+func listLogFiles(workspace string) []string {
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return nil
+	}
+	var logs []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".log") {
+			logs = append(logs, e.Name())
+		}
+	}
+	sort.Strings(logs)
+	return logs
+}
+
+// listWorkspaceDocs returns sorted .md filenames inside workspace/workspace/.
+func listWorkspaceDocs(workspace string) []string {
+	entries, err := os.ReadDir(workspace + "/workspace")
+	if err != nil {
+		return nil
+	}
+	var docs []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			docs = append(docs, e.Name())
+		}
+	}
+	sort.Strings(docs)
+	return docs
+}
+
+func (m Model) viewAgentOutput(t task.Task, _ task.Agent) string {
 	h := m.height - 2
 	headerH := 2
 	footerH := 2
@@ -550,19 +582,6 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 
 	lines = append(lines, "")
 
-	// Channels list
-	if len(channels) > 0 {
-		lines = append(lines, "  "+DimText.Render("CHANNELS"))
-		for _, ch := range channels {
-			base := strings.TrimSuffix(ch, ".md")
-			if ch == selectedChannel {
-				lines = append(lines, "  "+SepActive.Render("◆ "+base))
-			} else {
-				lines = append(lines, "  "+DimText.Render("· "+base))
-			}
-		}
-	}
-
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
@@ -573,7 +592,6 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 }
 
 // viewNetworkDetail — full-width animated network graph view.
-// Tab/←/→ navigates edges (channels). Enter opens the selected channel full-screen.
 func (m Model) viewNetworkDetail(t task.Task) string {
 	h := m.height - 2
 	headerH := 2
