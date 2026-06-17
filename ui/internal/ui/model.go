@@ -125,10 +125,14 @@ type tickMsg struct{}
 type claudeEventMsg struct {
 	tabIdx int
 	event  claude.Event
+	events <-chan claude.Event
+	errors <-chan string
 }
 type claudeErrorMsg struct {
 	tabIdx int
 	text   string
+	events <-chan claude.Event
+	errors <-chan string
 }
 type claudeDoneMsg struct{ tabIdx int }
 type clipboardPasteMsg string
@@ -206,8 +210,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case claudeEventMsg:
 		if msg.tabIdx < len(m.tabs) {
 			m.handleEvent(msg.tabIdx, msg.event)
-			t := m.tabs[msg.tabIdx]
-			return m, waitForEvent(msg.tabIdx, t.Events, t.Errors)
+			return m, waitForEvent(msg.tabIdx, msg.events, msg.errors)
 		}
 		return m, nil
 
@@ -218,7 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.tabIdx != m.tabIdx {
 				t.HasNew = true
 			}
-			return m, waitForEvent(msg.tabIdx, t.Events, t.Errors)
+			return m, waitForEvent(msg.tabIdx, msg.events, msg.errors)
 		}
 		return m, nil
 
@@ -303,12 +306,12 @@ func waitForEvent(tabIdx int, events <-chan claude.Event, errors <-chan string) 
 			if !ok {
 				return nil
 			}
-			return claudeEventMsg{tabIdx: tabIdx, event: ev}
+			return claudeEventMsg{tabIdx: tabIdx, event: ev, events: events, errors: errors}
 		case err, ok := <-errors:
 			if !ok {
 				return nil
 			}
-			return claudeErrorMsg{tabIdx: tabIdx, text: err}
+			return claudeErrorMsg{tabIdx: tabIdx, text: err, events: events, errors: errors}
 		}
 	}
 }
