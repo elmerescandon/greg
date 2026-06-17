@@ -1,12 +1,13 @@
-## define-issue — Cómo construir un issue bien definido para un agente de código
-
-El 82% de los fallos de un agente ocurren antes de escribir la primera línea — por un issue mal definido. Este skill guía a construir el issue correcto antes de ejecutar.
-
+---
+name: greg-issue
+description: Guía para construir un issue bien definido antes de pasárselo a un agente de código. Úsalo cuando el goal o issue no tiene suficiente claridad para actuar. Hace preguntas de a una hasta tener los 5 elementos mínimos, luego produce el issue estructurado.
 ---
 
-### Cuándo usarlo
+El 82% de los fallos de un agente ocurren antes de escribir la primera línea — por un issue mal definido.
 
-Usa este skill cuando el goal de la tarea o el issue de GitHub no tenga suficiente claridad para actuar. Si no puedes responder SÍ a estas 5 preguntas, el issue necesita refinarse:
+## Antes de escribir el issue
+
+Si no puedes responder SÍ a estas 5 preguntas, el issue necesita refinarse:
 
 1. ¿Sabes qué está roto o falta HOY (comportamiento actual observable)?
 2. ¿Sabes qué debe pasar DESPUÉS (comportamiento deseado observable)?
@@ -14,11 +15,9 @@ Usa este skill cuando el goal de la tarea o el issue de GitHub no tenga suficien
 4. ¿Conoces al menos UN archivo del codebase involucrado?
 5. ¿El scope cabe en esta sesión (un párrafo claro, menos de 5 criterios)?
 
-**Si hay una o más respuestas negativas → detente y pregunta al humano antes de continuar.**
+**Si hay una o más respuestas negativas → pregunta al humano antes de continuar. De a una pregunta.**
 
----
-
-### Cómo preguntar (de a una)
+## Cómo preguntar
 
 No hagas todas las preguntas juntas. Identifica cuál es el hueco más crítico y pregunta solo eso.
 
@@ -27,9 +26,7 @@ No hagas todas las preguntas juntas. Identifica cuál es el hueco más crítico 
 - Si no están claros los archivos: "¿En qué componente, endpoint o página ocurre esto?"
 - Si el scope parece grande: "¿Esto son varias cosas? ¿Cuál es la más importante resolver primero?"
 
----
-
-### Estructura del issue bien formado
+## Estructura del issue
 
 Una vez que tienes claridad, formula el issue así:
 
@@ -63,9 +60,7 @@ Guardrails
   Preguntar antes de: [cambios de alto impacto no cubiertos arriba]
 ```
 
----
-
-### Reglas críticas
+## Reglas críticas
 
 - **El issue describe el PROBLEMA, no la implementación.** Si el humano describe una solución, reformúlala como problema.
 - **El scope es una cerca, no una sugerencia.** Nombra explícitamente qué NO tocar.
@@ -73,9 +68,7 @@ Guardrails
 - **No inventes archivos o métodos.** Lee el codebase para confirmar que existen antes de referenciarlos.
 - **Siempre declara el "done checklist".** Sin él, el agente declara victoria demasiado pronto.
 
----
-
-### Failure modes a prevenir
+## Failure modes a prevenir
 
 | El agente hace esto | Causa en el issue | Fix |
 |---|---|---|
@@ -86,8 +79,6 @@ Guardrails
 | Duplica código existente | Sin referencia a patrón | Apunta al archivo a reutilizar |
 | Ejecuta comandos peligrosos | Sin guardrails | Agrega sección "Nunca / Preguntar" |
 
----
+## Referencia completa
 
-### Referencia completa
-
-Los 12 lineamientos con ejemplos están en el vault: `Salmona/lineamientos-issues-agentes.md`
+Los lineamientos con ejemplos están en el vault: `Salmona/lineamientos-issues-agentes.md`

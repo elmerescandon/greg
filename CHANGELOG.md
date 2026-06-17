@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.7] - 2026-06-17
+
+### Added
+
+**Skills**
+- `greg-issue/SKILL.md` — skill invocable (`/greg-issue`) para construir issues bien definidos antes de pasárselos a un agente; hace preguntas de a una hasta tener los 5 elementos mínimos y produce el issue estructurado
+
+### Removed
+
+**Skills**
+- `coding/define-issue.md` — reemplazado por `greg-issue/SKILL.md`
+
 ## [0.4.6] - 2026-06-17
 
 ### Changed
