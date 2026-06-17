@@ -754,11 +754,18 @@ _task_run() {
         echo "$skill_content"
       fi
     }
-    if [[ "$preset" == "coding" && "$aid" != "director" ]]; then
-      local coding_skill="${SKILLS_DIR}/coding/workflow/SKILL.md"
-      local coding_content
-      coding_content=$(_inject_preset_skill "$coding_skill" "$aid")
-      [[ -n "$coding_content" ]] && effective_role="${effective_role}"$'\n\n'"${coding_content}"
+    if [[ "$preset" == "coding" ]]; then
+      if [[ "$aid" == "director" ]]; then
+        local director_coding_skill="${SKILLS_DIR}/coding/director/SKILL.md"
+        local director_coding_content
+        director_coding_content=$(_inject_preset_skill "$director_coding_skill" "$aid")
+        [[ -n "$director_coding_content" ]] && effective_role="${effective_role}"$'\n\n'"${director_coding_content}"
+      else
+        local coding_skill="${SKILLS_DIR}/coding/workflow/SKILL.md"
+        local coding_content
+        coding_content=$(_inject_preset_skill "$coding_skill" "$aid")
+        [[ -n "$coding_content" ]] && effective_role="${effective_role}"$'\n\n'"${coding_content}"
+      fi
     elif [[ "$preset" == "research" && "$aid" != "director" ]]; then
       if echo "$effective_role" | grep -qiE 'recolect|gather|search|busca'; then
         local collector_skill="${SKILLS_DIR}/research/collector/SKILL.md"

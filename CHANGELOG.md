@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.10] - 2026-06-17
+
+### Added
+
+**Skills**
+- `coding/director/SKILL.md` — nuevo skill para el director con `--preset coding`: espera a todos los especialistas, verifica worktree, corre build de integración final, hace push y crea el único PR consolidado con body estructurado por especialista
+
+### Changed
+
+**Skills**
+- `coding/workflow/SKILL.md` — acotado a especialistas: elimina secciones de push y PR; el flujo termina en commits atómicos con build local verificado; el director es el único responsable de push y PR
+
+**CLI**
+- Bloque `--preset coding` en `greg task run`: el director ahora recibe `coding/director/SKILL.md`; los especialistas siguen recibiendo `coding/workflow/SKILL.md`
+
 ## [0.4.9] - 2026-06-17
 
 ### Changed
