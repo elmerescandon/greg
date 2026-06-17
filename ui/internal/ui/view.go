@@ -435,7 +435,7 @@ func countMsgsInFile(path string) int {
 	return strings.Count(string(raw), "### [")
 }
 
-// renderNetworkGraph draws an ASCII graph of agent communication for the given task.
+// renderNetworkGraph renders the Command Center table view for the given task.
 // selectedChannel is the basename of the currently selected messages/*.md file.
 // Returns a slice of lines of width w.
 func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChannel string, w, h int) []string {
@@ -445,32 +445,14 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 
 	agents := task.AllAgents(t)
 
-	// Build a set of agent IDs for quick lookup
-	agentIDs := map[string]bool{}
-	for _, a := range agents {
-		agentIDs[a.ID] = true
-	}
-
-	// Determine if "human" node is needed (human→director.md exists)
-	hasHuman := false
-	for _, ch := range channels {
-		base := strings.TrimSuffix(ch, ".md")
-		if strings.HasPrefix(base, "human→") || strings.HasPrefix(base, "human->") {
-			hasHuman = true
-			break
-		}
-	}
-
-	// Parse channels into edges: from → to with message count
-	type edge struct {
+	// Parse channels into from/to pairs with message counts
+	type msgEdge struct {
 		from, to string
 		count    int
-		channel  string // basename
 	}
-	var edges []edge
+	var msgEdges []msgEdge
 	for _, ch := range channels {
 		base := strings.TrimSuffix(ch, ".md")
-		// support both → (unicode) and -> (ascii)
 		var from, to string
 		if idx := strings.Index(base, "→"); idx >= 0 {
 			from = base[:idx]
@@ -482,369 +464,136 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 			continue
 		}
 		count := countMsgsInFile(t.Workspace + "/messages/" + ch)
-		edges = append(edges, edge{from: from, to: to, count: count, channel: ch})
+		msgEdges = append(msgEdges, msgEdge{from: from, to: to, count: count})
 	}
 
-	// Collect non-director, non-human agents that appear in edges
-	workerSet := map[string]bool{}
-	for _, e := range edges {
-		if e.from != "director" && e.from != "human" {
-			workerSet[e.from] = true
+	msgsIn := func(id string) int {
+		n := 0
+		for _, e := range msgEdges {
+			if e.to == id {
+				n += e.count
+			}
 		}
-		if e.to != "director" && e.to != "human" {
-			workerSet[e.to] = true
-		}
+		return n
 	}
-	// Also include all agents from task
-	for _, a := range agents {
-		if a.ID != "director" {
-			workerSet[a.ID] = true
+	msgsOut := func(id string) int {
+		n := 0
+		for _, e := range msgEdges {
+			if e.from == id {
+				n += e.count
+			}
 		}
-	}
-	var workers []string
-	for id := range workerSet {
-		workers = append(workers, id)
-	}
-	sort.Strings(workers)
-
-	// Helper: truncate agent label to fit box
-	const maxLabelW = 10
-	label := func(id string) string {
-		runes := []rune(id)
-		if len(runes) > maxLabelW {
-			return string(runes[:maxLabelW-1]) + "…"
-		}
-		return id
-	}
-	padLabel := func(id string) string {
-		lbl := label(id)
-		runes := []rune(lbl)
-		for len(runes) < maxLabelW {
-			runes = append(runes, ' ')
-		}
-		return string(runes)
-	}
-	// inner visual width: " " + bullet(1) + " " + label(maxLabelW) + " " = maxLabelW+4 = 14
-	const innerW = maxLabelW + 4
-
-	// Box drawing with animated status bullet
-	boxLines := func(id string, selected bool) []string {
-		status := task.AgentStatus(t.Workspace, id)
-		padded := padLabel(id)
-
-		var bulletChar string
-		switch status {
-		case "done", "completed":
-			bulletChar = "✔"
-		case "working":
-			bulletChar = spinFrames[m.spinIdx]
-		default:
-			bulletChar = "◌"
-		}
-
-		topRaw := "╔" + strings.Repeat("═", innerW) + "╗"
-		botRaw := "╚" + strings.Repeat("═", innerW) + "╝"
-
-		if selected {
-			mid := SepActive.Render("║") + " " + SepActive.Render(bulletChar) + " " + ViewActive.Render(padded) + " " + SepActive.Render("║")
-			return []string{SepActive.Render(topRaw), mid, SepActive.Render(botRaw)}
-		}
-
-		var bStyle, borderStyle lipgloss.Style
-		switch status {
-		case "done", "completed":
-			bStyle = StatusGreen
-			borderStyle = StatusGreen
-		case "working":
-			bStyle = StatusYellow
-			borderStyle = StatusYellow
-		default:
-			bStyle = DimText
-			borderStyle = DimText
-		}
-		mid := borderStyle.Render("║") + " " + bStyle.Render(bulletChar) + " " + DimText.Render(padded) + " " + borderStyle.Render("║")
-		return []string{borderStyle.Render(topRaw), mid, borderStyle.Render(botRaw)}
+		return n
 	}
 
-	// Build output lines — title/status shown in the parent view header, not here
+	rpad := func(s string, n int) string {
+		r := []rune(s)
+		for len(r) < n {
+			r = append(r, ' ')
+		}
+		return string(r)
+	}
+	truncate := func(s string, max int) string {
+		r := []rune(s)
+		if len(r) > max {
+			return string(r[:max-1]) + "…"
+		}
+		return s
+	}
+
 	var lines []string
+
+	// ══ COMMAND CENTER ═...═ ◉ N UNITS ══
+	nUnits := len(agents)
+	leftPart := "══ COMMAND CENTER "
+	rightPart := fmt.Sprintf(" ◉ %d UNITS ══", nUnits)
+	fillW := w - len([]rune(leftPart)) - len([]rune(rightPart))
+	if fillW < 2 {
+		fillW = 2
+	}
+	headerRaw := leftPart + strings.Repeat("═", fillW) + rightPart
+	lines = append(lines, ViewActive.Render(headerRaw))
+
 	lines = append(lines, "")
 
-	// Row 0: human (if present) → director
-	dirBox := boxLines("director", false)
-	// boxW = "╔" + "═"*innerW + "╗" = innerW+2 = 16 visual chars
-	rawDirTop := "╔" + strings.Repeat("═", innerW) + "╗"
-	dirBoxW := len([]rune(rawDirTop))
-
-	humanLine := ""
-	if hasHuman {
-		humanLine = DimText.Render("human") + "──▶"
+	// Director row
+	dirStatus := task.AgentStatus(t.Workspace, "director")
+	var dirBullet string
+	var dirStyle lipgloss.Style
+	switch dirStatus {
+	case "done", "completed":
+		dirBullet = "✔"
+		dirStyle = StatusGreen
+	case "working":
+		dirBullet = spinFrames[m.spinIdx]
+		dirStyle = StatusYellow
+	default:
+		dirBullet = "◌"
+		dirStyle = DimText
 	}
-	humanW := 0
-	if hasHuman {
-		humanW = len("human") + 3 // "human──▶"
-	}
+	dirLine := "  " + dirStyle.Render(dirBullet) + "  " +
+		ViewActive.Render(rpad("DIRECTOR", 14)) +
+		"  " + dirStyle.Render(rpad(dirStatus, 12)) +
+		"  " + DimText.Render(fmt.Sprintf("%-8d", msgsIn("director"))) +
+		"  " + DimText.Render(fmt.Sprintf("%d", msgsOut("director")))
+	lines = append(lines, dirLine)
 
-	// Center director box
-	centerX := w / 2
-	dirLeft := centerX - dirBoxW/2
-	if dirLeft < humanW {
-		dirLeft = humanW
+	// Separator
+	sepW := w - 4
+	if sepW < 2 {
+		sepW = 2
 	}
+	lines = append(lines, "  "+DimText.Render(strings.Repeat("─", sepW)))
 
-	pad := func(n int) string {
-		if n <= 0 {
-			return ""
+	// Table header
+	lines = append(lines, "  "+
+		SectionHeader.Render(rpad("UNIT", 16))+
+		SectionHeader.Render(rpad("STATUS", 14))+
+		SectionHeader.Render(rpad("MSGS IN", 10))+
+		SectionHeader.Render("MSGS OUT"))
+
+	// Agent rows (non-director)
+	for _, a := range agents {
+		if a.ID == "director" {
+			continue
 		}
-		return strings.Repeat(" ", n)
-	}
-
-	if hasHuman {
-		lines = append(lines, pad(dirLeft-humanW)+humanLine+dirBox[0])
-		lines = append(lines, pad(dirLeft)+dirBox[1])
-		lines = append(lines, pad(dirLeft)+dirBox[2])
-	} else {
-		lines = append(lines, pad(dirLeft)+dirBox[0])
-		lines = append(lines, pad(dirLeft)+dirBox[1])
-		lines = append(lines, pad(dirLeft)+dirBox[2])
-	}
-
-	if len(workers) == 0 {
-		for len(lines) < h {
-			lines = append(lines, "")
+		status := task.AgentStatus(t.Workspace, a.ID)
+		var bullet string
+		var aStyle lipgloss.Style
+		switch status {
+		case "done", "completed":
+			bullet = "✔"
+			aStyle = StatusGreen
+		case "working":
+			bullet = spinFrames[m.spinIdx]
+			aStyle = StatusYellow
+		default:
+			bullet = "◌"
+			aStyle = DimText
 		}
-		return lines[:h]
+		idTrunc := truncate(a.ID, 14)
+		row := "  " + aStyle.Render(bullet) + " " +
+			DimText.Render(rpad(idTrunc, 15)) +
+			" " + aStyle.Render(rpad(status, 13)) +
+			" " + DimText.Render(fmt.Sprintf("%-10d", msgsIn(a.ID))) +
+			DimText.Render(fmt.Sprintf("%d", msgsOut(a.ID)))
+		lines = append(lines, row)
 	}
 
-	// Build arrow lines from director to each worker
-	// Each worker gets a column slot
-	const workerBoxW = innerW + 2 // "╔" + "═"*innerW + "╗" = 16 visual chars
+	lines = append(lines, "")
 
-	// Spread workers to fill ~70% of terminal width
-	workerGap := 3
-	if len(workers) > 1 {
-		idealGap := (w*7/10 - len(workers)*workerBoxW) / (len(workers) - 1)
-		if idealGap > workerGap {
-			workerGap = idealGap
-		}
-	}
-
-	totalWorkerW := len(workers)*workerBoxW + (len(workers)-1)*workerGap
-	workerLeft := (w - totalWorkerW) / 2
-	if workerLeft < 0 {
-		workerLeft = 0
-	}
-
-	// Center X of each worker box
-	workerCenterX := make([]int, len(workers))
-	for i := range workers {
-		workerCenterX[i] = workerLeft + i*(workerBoxW+workerGap) + workerBoxW/2
-	}
-
-	// Draw arrow column from directorCenter down to worker row
-	dirCenterX := dirLeft + dirBoxW/2
-
-	// Count messages on director→worker channels
-	msgCount := func(from, to string) (int, string) {
-		for _, e := range edges {
-			if e.from == from && e.to == to {
-				return e.count, e.channel
-			}
-			if e.from == to && e.to == from {
-				return e.count, e.channel
-			}
-		}
-		return 0, ""
-	}
-
-	// Build arrow segments: one per director↔worker edge
-	type arrowSeg struct {
-		x       int
-		countS  string
-		ch      string
-		workerI int
-	}
-	var arrowSegs []arrowSeg
-	for i, wid := range workers {
-		cx := workerCenterX[i]
-		count, ch := msgCount("director", wid)
-		countS := "·"
-		if count > 0 {
-			countS = fmt.Sprintf("%d", count)
-		}
-		arrowSegs = append(arrowSegs, arrowSeg{x: cx, countS: countS, ch: ch, workerI: i})
-	}
-
-	// buildArrowPipe renders │ (or ┃ for selected) at each worker X position.
-	buildArrowPipe := func() string {
-		runeB := []rune(strings.Repeat(" ", w))
-		var parts []string
-		last := 0
-		for _, seg := range arrowSegs {
-			isSelected := seg.ch == selectedChannel
-			bx := seg.x
-			if bx > last {
-				parts = append(parts, string(runeB[last:bx]))
-			}
-			if isSelected {
-				parts = append(parts, SepActive.Render("┃"))
+	// Channels list
+	if len(channels) > 0 {
+		lines = append(lines, "  "+DimText.Render("CHANNELS"))
+		for _, ch := range channels {
+			base := strings.TrimSuffix(ch, ".md")
+			if ch == selectedChannel {
+				lines = append(lines, "  "+SepActive.Render("◆ "+base))
 			} else {
-				parts = append(parts, DimText.Render("│"))
+				lines = append(lines, "  "+DimText.Render("· "+base))
 			}
-			last = bx + 1
 		}
-		if last < w {
-			parts = append(parts, string(runeB[last:]))
-		}
-		return strings.Join(parts, "")
 	}
-
-	// buildCountLine renders message counts centered at each worker X position.
-	buildCountLine := func() string {
-		runeBase := []rune(strings.Repeat(" ", w))
-		var parts []string
-		last := 0
-		for _, seg := range arrowSegs {
-			isSelected := seg.ch == selectedChannel
-			cs := []rune(seg.countS)
-			start := seg.x - len(cs)/2
-			for j, r := range cs {
-				if pos := start + j; pos >= 0 && pos < w {
-					runeBase[pos] = r
-				}
-			}
-			if start > last {
-				parts = append(parts, string(runeBase[last:start]))
-			}
-			if isSelected {
-				parts = append(parts, SepActive.Render(seg.countS))
-			} else {
-				parts = append(parts, DimText.Render(seg.countS))
-			}
-			last = start + len(cs)
-		}
-		if last < w {
-			parts = append(parts, string(runeBase[last:]))
-		}
-		return strings.Join(parts, "")
-	}
-
-	// dirDropLine: │ straight down from director bottom to horizontal bar
-	{
-		runeD := []rune(strings.Repeat(" ", w))
-		if dirCenterX >= 0 && dirCenterX < w {
-			runeD[dirCenterX] = '│'
-		}
-		lines = append(lines, DimText.Render(string(runeD)))
-	}
-
-	// connLine: horizontal bar connecting director to workers
-	// Layout: └─┬─┬─┘  or  │  (single worker straight-through)
-	var connLine string
-	if len(workers) == 1 {
-		cx := workerCenterX[0]
-		runeC := []rune(strings.Repeat(" ", w))
-		if dirCenterX == cx {
-			runeC[cx] = '│'
-		} else {
-			minX, maxX := dirCenterX, cx
-			if minX > maxX {
-				minX, maxX = maxX, minX
-			}
-			for x := minX; x <= maxX; x++ {
-				runeC[x] = '─'
-			}
-			if dirCenterX < cx {
-				runeC[dirCenterX] = '└'
-				runeC[cx] = '┬'
-			} else {
-				runeC[dirCenterX] = '┘'
-				runeC[cx] = '┬'
-			}
-		}
-		connLine = DimText.Render(string(runeC))
-	} else {
-		leftCX := workerCenterX[0]
-		rightCX := workerCenterX[len(workerCenterX)-1]
-		runeC := []rune(strings.Repeat(" ", w))
-		for x := leftCX; x <= rightCX; x++ {
-			if x >= 0 && x < w {
-				runeC[x] = '─'
-			}
-		}
-		// ┬ at each worker (T-junction going down)
-		for _, cx := range workerCenterX {
-			if cx >= 0 && cx < w {
-				runeC[cx] = '┬'
-			}
-		}
-		// Director junction
-		if dirCenterX >= leftCX && dirCenterX <= rightCX {
-			if runeC[dirCenterX] == '┬' {
-				runeC[dirCenterX] = '┼'
-			} else {
-				runeC[dirCenterX] = '┬'
-			}
-		} else if dirCenterX < leftCX {
-			for x := dirCenterX; x < leftCX; x++ {
-				if x >= 0 && x < w && runeC[x] == ' ' {
-					runeC[x] = '─'
-				}
-			}
-			if dirCenterX >= 0 && dirCenterX < w {
-				runeC[dirCenterX] = '└'
-			}
-		} else {
-			for x := rightCX + 1; x <= dirCenterX; x++ {
-				if x >= 0 && x < w && runeC[x] == ' ' {
-					runeC[x] = '─'
-				}
-			}
-			if dirCenterX >= 0 && dirCenterX < w {
-				runeC[dirCenterX] = '┘'
-			}
-		}
-		connLine = DimText.Render(string(runeC))
-	}
-
-	// Order: dirDropLine (already appended) → connLine → │ → counts → │ → workers
-	lines = append(lines, connLine)
-	lines = append(lines, buildArrowPipe())
-	lines = append(lines, buildCountLine())
-	lines = append(lines, buildArrowPipe())
-
-	// Worker boxes — highlighted if their edge is selected
-	workerBox0 := make([]string, len(workers))
-	workerBox1 := make([]string, len(workers))
-	workerBox2 := make([]string, len(workers))
-	for i, wid := range workers {
-		isSelected := false
-		for _, e := range edges {
-			if (e.from == wid || e.to == wid) && e.channel == selectedChannel {
-				isSelected = true
-				break
-			}
-		}
-		wb := boxLines(wid, isSelected)
-		workerBox0[i] = wb[0]
-		workerBox1[i] = wb[1]
-		workerBox2[i] = wb[2]
-	}
-
-	// Build worker row lines
-	buildWorkerLine := func(parts []string) string {
-		result := pad(workerLeft)
-		for i, p := range parts {
-			result += p
-			if i < len(parts)-1 {
-				result += pad(workerGap)
-			}
-		}
-		return result
-	}
-	lines = append(lines, buildWorkerLine(workerBox0))
-	lines = append(lines, buildWorkerLine(workerBox1))
-	lines = append(lines, buildWorkerLine(workerBox2))
 
 	for len(lines) < h {
 		lines = append(lines, "")
