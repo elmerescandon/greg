@@ -140,9 +140,16 @@ go build -o greg-ui .
 ln -s "$(pwd)/greg-ui" ~/.local/bin/greg-ui
 ```
 
-The TUI has two views: **Chat** (`Ctrl+1`) and **Agente** (`Ctrl+2`). Each chat session remembers its model and effort level across restarts — resuming a session restores the model it was using.
+The TUI has four views. Each chat session remembers its model and effort level across restarts.
 
-The Agente tab shows task details with animated ASCII tamagotchi sprites per agent:
+| Key | View |
+|-----|------|
+| `Ctrl+1` | **Métricas** — session sidebar + Claude output panel |
+| `Ctrl+2` / `Ctrl+Space` | **Multiple** — multi-agent task browser (office view + document reader) |
+| `Ctrl+3` | **Gráficas** — usage charts |
+| `Ctrl+4` | **Config** — model and effort selector |
+
+The Multiple view shows animated ASCII tamagotchi sprites per agent:
 
 ```
 ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
@@ -152,15 +159,34 @@ The Agente tab shows task details with animated ASCII tamagotchi sprites per age
 └──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
-Below the desks: navigable message channel tabs and a chat panel for reading/sending messages.
+**Global**
 
 | Key | Action |
 |-----|--------|
-| `←/→` | Switch message channel |
-| `↑/↓` | Scroll chat |
-| `f` or `i` | Focus chat input |
-| `Enter` | Send message (in input) / View agent output (in nav) |
-| `Esc` | Cancel input / Go back |
+| `Ctrl+T` | New session tab |
+| `Ctrl+W` | Close current tab |
+| `Ctrl+K` | Pre-fill `/compact` |
+| `Ctrl+V` | Paste from clipboard |
+| `Ctrl+Q` | Quit |
+
+**Métricas view (Ctrl+1)**
+
+| Key | Action |
+|-----|--------|
+| `↑/↓` | Scroll output |
+| `Ctrl+Shift+↑/↓` | Navigate session sidebar |
+| `Ctrl+Shift+Enter` / `Enter` | Open selected session |
+| `Esc` | Unfocus sidebar |
+
+**Multiple view (Ctrl+2) — inside a task**
+
+| Key | Action |
+|-----|--------|
+| `←/→` or `Tab` | Switch document / message channel |
+| `↑/↓`, `PgUp/PgDn` | Scroll |
+| `f` or `i` | Focus message input |
+| `Enter` | Send message |
+| `Esc` / `Ctrl+Shift+↑` | Go back |
 
 ### Skills
 
@@ -171,8 +197,7 @@ greg injects prompt templates (skills) into each agent to define their behavior:
 | `greg-mailbox.md` | Workspace and messaging protocol — injected into every agent; exposes `send-msg`, `wait-msg`, `check-msgs` |
 | `greg-director.md` | Director: coordinate team, cross-pollinate findings, write synthesis |
 | `greg-teammate.md` | Specialist: progressive writing, proactive reading, status protocol |
-| `greg-preset-coding.md` | Delegates to `greg-coding` — injected into agents when `--preset coding` is used |
-| `greg-coding` | `/greg-coding` — coding task rules: git workflow, build/test checklist, quality standards, cross-agent collaboration protocol |
+| `greg-coding` | Injected by `--preset coding`; also invocable as `/greg-coding` — git workflow, build/test checklist, quality standards, cross-agent collaboration protocol |
 | `greg-task` | `/greg-task` — interactive skill to design and launch a multi-agent task |
 | `greg-learn` | `/greg-learn` — consolidate learnings from a conversation into persistent memory |
 | `coding/define-issue.md` | Guide for writing well-defined issues before handing them to a coding agent |
