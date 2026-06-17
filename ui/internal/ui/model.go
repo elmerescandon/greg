@@ -123,18 +123,18 @@ type Model struct {
 // Messages
 type tickMsg struct{}
 type claudeEventMsg struct {
-	tabIdx int
+	tabID  string
 	event  claude.Event
 	events <-chan claude.Event
 	errors <-chan string
 }
 type claudeErrorMsg struct {
-	tabIdx int
+	tabID  string
 	text   string
 	events <-chan claude.Event
 	errors <-chan string
 }
-type claudeDoneMsg struct{ tabIdx int }
+type claudeDoneMsg struct{ tabID string }
 type clipboardPasteMsg string
 
 func readClipboardCmd() tea.Cmd {
@@ -191,6 +191,15 @@ func tickCmd() tea.Cmd {
 
 func (m Model) tab() *Tab { return m.tabs[m.tabIdx] }
 
+func (m *Model) tabByID(id string) (int, *Tab) {
+	for i, t := range m.tabs {
+		if t.GregSessionID == id {
+			return i, t
+		}
+	}
+	return -1, nil
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
@@ -208,32 +217,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case claudeEventMsg:
-		if msg.tabIdx < len(m.tabs) {
-			m.handleEvent(msg.tabIdx, msg.event)
-			return m, waitForEvent(msg.tabIdx, msg.events, msg.errors)
+		if idx, _ := m.tabByID(msg.tabID); idx >= 0 {
+			m.handleEvent(idx, msg.event)
+			return m, waitForEvent(msg.tabID, msg.events, msg.errors)
 		}
 		return m, nil
 
 	case claudeErrorMsg:
-		if msg.tabIdx < len(m.tabs) {
-			t := m.tabs[msg.tabIdx]
+		if idx, t := m.tabByID(msg.tabID); idx >= 0 {
 			t.Lines = append(t.Lines, ErrorText.Render(msg.text))
-			if msg.tabIdx != m.tabIdx {
+			if idx != m.tabIdx {
 				t.HasNew = true
 			}
-			return m, waitForEvent(msg.tabIdx, msg.events, msg.errors)
+			return m, waitForEvent(msg.tabID, msg.events, msg.errors)
 		}
 		return m, nil
 
 	case claudeDoneMsg:
-		if msg.tabIdx < len(m.tabs) {
-			t := m.tabs[msg.tabIdx]
+		if idx, t := m.tabByID(msg.tabID); idx >= 0 {
 			t.Running = false
 			t.Proc = nil
 			t.CurrentAction = ""
 			t.Lines = append(t.Lines, "")
 
-			if t.CompactPending && msg.tabIdx == m.tabIdx {
+			if t.CompactPending && idx == m.tabIdx {
 				t.CompactPending = false
 				t.CompactWarned = false
 				t.Lines = append(t.Lines, ErrorText.Render("⚡ contexto al límite — escribe qué quieres preservar y presiona Enter"))
@@ -299,19 +306,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func waitForEvent(tabIdx int, events <-chan claude.Event, errors <-chan string) tea.Cmd {
+func waitForEvent(tabID string, events <-chan claude.Event, errors <-chan string) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case ev, ok := <-events:
 			if !ok {
 				return nil
 			}
-			return claudeEventMsg{tabIdx: tabIdx, event: ev, events: events, errors: errors}
+			return claudeEventMsg{tabID: tabID, event: ev, events: events, errors: errors}
 		case err, ok := <-errors:
 			if !ok {
 				return nil
 			}
-			return claudeErrorMsg{tabIdx: tabIdx, text: err, events: events, errors: errors}
+			return claudeErrorMsg{tabID: tabID, text: err, events: events, errors: errors}
 		}
 	}
 }
@@ -508,7 +515,7 @@ func (m *Model) send(text string) tea.Cmd {
 	model := t.Model
 	effort := t.Effort
 	claudeSess := t.ClaudeSession
-	tabIdx := m.tabIdx
+	tabID := t.GregSessionID
 
 	proc, events, errors := claude.StartClaude(vault, model, effort, text, claudeSess)
 	t.Proc = proc
@@ -516,10 +523,10 @@ func (m *Model) send(text string) tea.Cmd {
 	t.Errors = errors
 
 	return tea.Batch(
-		waitForEvent(tabIdx, events, errors),
+		waitForEvent(tabID, events, errors),
 		func() tea.Msg {
 			<-proc.Done
-			return claudeDoneMsg{tabIdx: tabIdx}
+			return claudeDoneMsg{tabID: tabID}
 		},
 	)
 }
