@@ -888,7 +888,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			case "up":
 				if m.taskSectionFocus == 1 {
-					m.taskChatScrollOffset++
+					if curTask != nil {
+						channels := listMsgChannels(curTask.Workspace)
+						if len(channels) > 0 {
+							m.activeMsgChannel = (m.activeMsgChannel - 1 + len(channels)) % len(channels)
+							m.taskChatScrollOffset = 0
+						}
+					}
 				} else if curTask != nil {
 					if m.multiAgentIdx > 0 {
 						m.multiAgentIdx--
@@ -896,8 +902,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			case "down":
 				if m.taskSectionFocus == 1 {
-					if m.taskChatScrollOffset > 0 {
-						m.taskChatScrollOffset--
+					if curTask != nil {
+						channels := listMsgChannels(curTask.Workspace)
+						if len(channels) > 0 {
+							m.activeMsgChannel = (m.activeMsgChannel + 1) % len(channels)
+							m.taskChatScrollOffset = 0
+						}
 					}
 				} else if curTask != nil {
 					agents := task.AllAgents(*curTask)
