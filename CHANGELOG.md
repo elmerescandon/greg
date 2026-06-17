@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.9] - 2026-06-17
+
+### Changed
+
+**Skills**
+- `coding/workflow` — flujo completo reescrito: branch naming por tipo (feat/bugfix/hotfix/refactor/docs), commits atómicos con formato convencional, build obligatorio por stack con tabla de comandos, push, y creación de PR con `gh pr create` y body estructurado; agentes ya no terminan sin PR
+
 ## [0.4.8] - 2026-06-17
 
 ### Changed
