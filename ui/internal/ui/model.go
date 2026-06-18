@@ -131,24 +131,19 @@ type Model struct {
 	metricsShowCost       bool
 	sidebarFocused        bool
 	sidebarIdx            int
-	multiSelectedIdx       int
-	multiDetailMode        bool
-	multiAgentIdx          int
-	multiAgentView         bool
-	multiAgentScrollOffset int
-	multiDocIdx            int
-	multiDocSource         string // "workspace" or "messages"
+	multiSelectedIdx        int
+	multiDetailMode         bool
+	multiDetailCursorIdx    int
+	multiDetailFile         string
+	multiDetailSession      string
+	multiDetailScrollOffset int
+	multiDetailRendered     []string
+	multiDetailRendering    bool
+	multiDetailTmuxLines    []string
+	multiDetailTmuxRendering bool
 	cfg                   gregConfig
 	configCursorIdx       int
 	tickCount             int
-
-	// Task detail chat/office view
-	taskChatInput        string
-	taskChatCursorPos    int
-	taskChatScrollOffset int
-	activeMsgChannel     int
-	taskChatFocused      bool
-	taskSectionFocus     int // 0 = agentes, 1 = docs/mensajes
 }
 
 // Messages
@@ -167,6 +162,14 @@ type claudeErrorMsg struct {
 }
 type claudeDoneMsg struct{ tabID string }
 type clipboardPasteMsg string
+type fileRenderedMsg struct {
+	path  string
+	lines []string
+}
+type tmuxCapturedMsg struct {
+	sessionID string
+	lines     []string
+}
 
 func readClipboardCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -344,6 +347,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clipboardPasteMsg:
 		m.insertText(string(msg))
+		return m, nil
+
+	case fileRenderedMsg:
+		if msg.path == m.multiDetailFile {
+			m.multiDetailRendered = msg.lines
+			m.multiDetailRendering = false
+		}
+		return m, nil
+
+	case tmuxCapturedMsg:
+		if msg.sessionID == m.multiDetailSession {
+			m.multiDetailTmuxLines = msg.lines
+			m.multiDetailTmuxRendering = false
+		}
 		return m, nil
 	}
 
@@ -817,232 +834,79 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.viewMode == ViewMultiple {
 		listH := m.height - 6 // topbar(2) + header(2) + footer(2)
 
-		// Level 3: document browser
-		if m.multiAgentView {
-			tasks, _ := task.LoadTasks()
-			var docWorkspace string
-			if m.multiSelectedIdx < len(tasks) {
-				docWorkspace = tasks[m.multiSelectedIdx].Workspace
-			}
+		// Level 3: tmux peek o file viewer
+		if m.multiDetailSession != "" || m.multiDetailFile != "" {
 			switch k {
-			case "escape", "backspace", "ctrl+shift+up":
-				m.multiAgentView = false
-				m.multiAgentScrollOffset = 0
-			case "left":
-				if docWorkspace != "" {
-					var docs []string
-					if m.multiDocSource == "messages" {
-						docs = listMsgChannels(docWorkspace)
-					} else {
-						docs = listWorkspaceDocs(docWorkspace)
-					}
-					if len(docs) > 0 {
-						m.multiDocIdx = (m.multiDocIdx - 1 + len(docs)) % len(docs)
-						m.multiAgentScrollOffset = 0
-					}
-				}
-			case "right", "tab":
-				if docWorkspace != "" {
-					var docs []string
-					if m.multiDocSource == "messages" {
-						docs = listMsgChannels(docWorkspace)
-					} else {
-						docs = listWorkspaceDocs(docWorkspace)
-					}
-					if len(docs) > 0 {
-						m.multiDocIdx = (m.multiDocIdx + 1) % len(docs)
-						m.multiAgentScrollOffset = 0
-					}
-				}
+			case "escape", "backspace":
+				m.multiDetailSession = ""
+				m.multiDetailFile = ""
+				m.multiDetailScrollOffset = 0
+				m.multiDetailRendered = nil
+				m.multiDetailRendering = false
+				m.multiDetailTmuxLines = nil
+				m.multiDetailTmuxRendering = false
 			case "up":
-				m.multiAgentScrollOffset++
+				m.multiDetailScrollOffset++
 			case "down":
-				if m.multiAgentScrollOffset > 0 {
-					m.multiAgentScrollOffset--
+				if m.multiDetailScrollOffset > 0 {
+					m.multiDetailScrollOffset--
 				}
 			case "pgup":
-				m.multiAgentScrollOffset += m.height / 2
+				m.multiDetailScrollOffset += m.height / 2
 			case "pgdown":
-				m.multiAgentScrollOffset -= m.height / 2
-				if m.multiAgentScrollOffset < 0 {
-					m.multiAgentScrollOffset = 0
+				m.multiDetailScrollOffset -= m.height / 2
+				if m.multiDetailScrollOffset < 0 {
+					m.multiDetailScrollOffset = 0
 				}
 			}
 			return m, nil
 		}
 
-		// Level 2: task detail (office view)
+		// Level 2: command center con navegación
 		if m.multiDetailMode {
 			tasks, _ := task.LoadTasks()
-			n := len(tasks)
-			sel := m.multiSelectedIdx
-			if sel >= n {
-				sel = n - 1
-			}
 			var curTask *task.Task
-			if sel >= 0 && sel < n {
-				t := tasks[sel]
+			if m.multiSelectedIdx < len(tasks) {
+				t := tasks[m.multiSelectedIdx]
 				curTask = &t
 			}
-
-			// Input-focused mode: text editing
-			if m.taskChatFocused {
-				switch k {
-				case "escape":
-					m.taskChatFocused = false
-					m.taskChatInput = ""
-					m.taskChatCursorPos = 0
-				case "enter":
-					if strings.TrimSpace(m.taskChatInput) == "" {
-						m.taskChatFocused = false
-						m.taskChatInput = ""
-						m.taskChatCursorPos = 0
-					} else if curTask != nil {
-						m.sendTaskMessage(curTask.TaskID, m.taskChatInput)
-						m.taskChatInput = ""
-						m.taskChatCursorPos = 0
-						m.taskChatFocused = false
-					}
-				case "backspace":
-					if m.taskChatCursorPos > 0 {
-						m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos-1] + m.taskChatInput[m.taskChatCursorPos:]
-						m.taskChatCursorPos--
-					}
-				default:
-					if msg.Text != "" {
-						m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos] + msg.Text + m.taskChatInput[m.taskChatCursorPos:]
-						m.taskChatCursorPos += len(msg.Text)
-					}
-				}
-				return m, nil
-			}
-
-			// Navigation mode
 			switch k {
 			case "escape", "backspace":
 				m.multiDetailMode = false
-				m.multiAgentIdx = 0
-				m.multiDocIdx = 0
-				m.multiDocSource = ""
-				m.taskChatInput = ""
-				m.taskChatCursorPos = 0
-				m.taskChatScrollOffset = 0
-				m.activeMsgChannel = 0
-				m.taskChatFocused = false
-				m.taskSectionFocus = 0
-			case "tab", "right":
-				if curTask != nil {
-					channels := listMsgChannels(curTask.Workspace)
-					if len(channels) > 0 {
-						m.activeMsgChannel = (m.activeMsgChannel + 1) % len(channels)
-						m.taskChatScrollOffset = 0
-					}
-				}
-			case "left":
-				if curTask != nil {
-					channels := listMsgChannels(curTask.Workspace)
-					if len(channels) > 0 {
-						m.activeMsgChannel = (m.activeMsgChannel - 1 + len(channels)) % len(channels)
-						m.taskChatScrollOffset = 0
-					}
-				}
+				m.multiDetailCursorIdx = 0
 			case "up":
-				if m.taskSectionFocus == 1 {
-					if curTask != nil {
-						channels := listMsgChannels(curTask.Workspace)
-						if len(channels) > 0 {
-							m.activeMsgChannel = (m.activeMsgChannel - 1 + len(channels)) % len(channels)
-							m.taskChatScrollOffset = 0
-						}
-					}
-				} else if curTask != nil {
-					if m.multiAgentIdx > 0 {
-						m.multiAgentIdx--
-					}
+				if m.multiDetailCursorIdx > 0 {
+					m.multiDetailCursorIdx--
 				}
 			case "down":
-				if m.taskSectionFocus == 1 {
-					if curTask != nil {
-						channels := listMsgChannels(curTask.Workspace)
-						if len(channels) > 0 {
-							m.activeMsgChannel = (m.activeMsgChannel + 1) % len(channels)
-							m.taskChatScrollOffset = 0
-						}
-					}
-				} else if curTask != nil {
+				if curTask != nil {
 					agents := task.AllAgents(*curTask)
-					if m.multiAgentIdx < len(agents)-1 {
-						m.multiAgentIdx++
+					docs := listWorkspaceFiles(curTask.Workspace)
+					msgs := listMsgChannels(curTask.Workspace)
+					total := len(agents) + len(docs) + len(msgs)
+					if m.multiDetailCursorIdx < total-1 {
+						m.multiDetailCursorIdx++
 					}
 				}
-			case "ctrl+shift+up":
-				m.taskSectionFocus = 0
-			case "ctrl+shift+down":
-				m.taskSectionFocus = 1
-			case "pgup":
-				m.taskChatScrollOffset += m.height / 2
-			case "pgdown":
-				m.taskChatScrollOffset -= m.height / 2
-				if m.taskChatScrollOffset < 0 {
-					m.taskChatScrollOffset = 0
-				}
-			case "f", "i":
-				m.taskChatFocused = true
 			case "enter":
-				// Open selected message channel in full-screen doc browser
-				if curTask != nil {
-					channels := listMsgChannels(curTask.Workspace)
-					if len(channels) > 0 {
-						activeCh := m.activeMsgChannel
-						if activeCh >= len(channels) {
-							activeCh = 0
-						}
-						m.multiDocSource = "messages"
-						m.multiDocIdx = activeCh
-						m.multiAgentView = true
-						m.multiAgentScrollOffset = 0
-					}
-				}
-			case "o":
-				// Open selected agent workspace doc in full-screen doc browser
 				if curTask != nil {
 					agents := task.AllAgents(*curTask)
-					if m.multiAgentIdx < len(agents) {
-						agentFile := agents[m.multiAgentIdx].ID + ".md"
-						docs := listWorkspaceDocs(curTask.Workspace)
-						m.multiDocIdx = 0
-						for i, d := range docs {
-							if d == agentFile {
-								m.multiDocIdx = i
-								break
-							}
+					idx := m.multiDetailCursorIdx
+					if idx < len(agents) {
+						sid := agents[idx].SessionID
+						if sid != "" {
+							m.multiDetailSession = sid
+							m.multiDetailScrollOffset = 0
+							m.multiDetailTmuxLines = nil
+							m.multiDetailTmuxRendering = true
+							return m, captureSessionCmd(sid, m.width)
 						}
-						m.multiDocSource = "workspace"
-						m.multiAgentView = true
-						m.multiAgentScrollOffset = 0
-					}
-				}
-			case "l":
-				// Open coordinator.log in full-screen viewer
-				if curTask != nil {
-					logs := listLogFiles(curTask.Workspace)
-					if len(logs) > 0 {
-						m.multiDocSource = "logs"
-						m.multiDocIdx = 0
-						m.multiAgentView = true
-						m.multiAgentScrollOffset = 0
-					}
-				}
-			case "x":
-				if curTask != nil {
-					agents := task.AllAgents(*curTask)
-					if m.multiAgentIdx < len(agents) {
-						tid := curTask.TaskID
-						aid := agents[m.multiAgentIdx].ID
-						go func(taskID, agentID string) {
-							c := osexec.Command("greg", "task", "done", taskID, agentID)
-							c.Run()
-						}(tid, aid)
+					} else if fp := m.resolveDetailFile(curTask); fp != "" {
+						m.multiDetailFile = fp
+						m.multiDetailScrollOffset = 0
+						m.multiDetailRendered = nil
+						m.multiDetailRendering = true
+						return m, renderFileCmd(fp, m.width-4)
 					}
 				}
 			}
@@ -1053,12 +917,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch k {
 		case "enter":
 			m.multiDetailMode = true
-			m.multiAgentIdx = 0
-			m.taskChatInput = ""
-			m.taskChatCursorPos = 0
-			m.taskChatScrollOffset = 0
-			m.activeMsgChannel = 0
-			m.taskChatFocused = false
+			m.multiDetailCursorIdx = 0
 		case "up":
 			if m.multiSelectedIdx > 0 {
 				m.multiSelectedIdx--
@@ -1226,11 +1085,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) insertText(text string) {
-	if m.viewMode == ViewMultiple && m.multiDetailMode && m.taskChatFocused {
-		m.taskChatInput = m.taskChatInput[:m.taskChatCursorPos] + text + m.taskChatInput[m.taskChatCursorPos:]
-		m.taskChatCursorPos += len(text)
-		return
-	}
 	t := m.tab()
 	if !t.Running {
 		t.InputBuf = t.InputBuf[:t.CursorPos] + text + t.InputBuf[t.CursorPos:]
@@ -1238,15 +1092,20 @@ func (m *Model) insertText(text string) {
 	}
 }
 
-func (m *Model) sendTaskMessage(taskID, msg string) {
-	msg = strings.TrimSpace(msg)
-	if msg == "" {
-		return
+// listWorkspaceFiles returns sorted .md filenames inside workspace/workspace/.
+func listWorkspaceFiles(workspace string) []string {
+	entries, err := os.ReadDir(workspace + "/workspace")
+	if err != nil {
+		return nil
 	}
-	go func(tid, text string) {
-		c := osexec.Command("greg", "task", "message", tid, text)
-		c.Run()
-	}(taskID, msg)
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // listMsgChannels returns sorted basenames of *.md files in workspace/messages/.
@@ -1503,6 +1362,24 @@ func (m *Model) checkIdleTimeout() {
 	if len(toArchive) > 0 {
 		session.ArchiveTaskSessions(toArchive)
 	}
+}
+
+func (m *Model) resolveDetailFile(t *task.Task) string {
+	agents := task.AllAgents(*t)
+	docs := listWorkspaceFiles(t.Workspace)
+	msgs := listMsgChannels(t.Workspace)
+	idx := m.multiDetailCursorIdx - len(agents)
+	if idx < 0 {
+		return ""
+	}
+	if idx < len(docs) {
+		return t.Workspace + "/workspace/" + docs[idx]
+	}
+	idx -= len(docs)
+	if idx < len(msgs) {
+		return t.Workspace + "/messages/" + msgs[idx]
+	}
+	return ""
 }
 
 // tabAtX returns the tab index at the given X column in the tab bar, or -1.

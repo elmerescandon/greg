@@ -3,10 +3,11 @@ package ui
 import (
 	"fmt"
 	"os"
-	"sort"
+	osexec "os/exec"
 	"strings"
 	"time"
 
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/elmerescandon/greg-ui/internal/session"
 	"github.com/elmerescandon/greg-ui/internal/task"
@@ -145,10 +146,12 @@ func (m Model) viewMultiple() string {
 		}
 	}
 
-	if m.multiAgentView && sel >= 0 && sel < n {
-		return m.viewAgentOutput(tasks[sel], task.Agent{})
+	if m.multiDetailSession != "" {
+		return m.viewTmuxPeek()
 	}
-
+	if m.multiDetailFile != "" {
+		return m.viewFileContent()
+	}
 	if m.multiDetailMode && sel >= 0 && sel < n {
 		return m.viewNetworkDetail(tasks[sel])
 	}
@@ -264,167 +267,6 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	return selector + coloredBullet + TaskRowDim.Render(rowPrefix+goal)
 }
 
-// listLogFiles returns sorted log filenames in the workspace root (coordinator.log, etc.).
-func listLogFiles(workspace string) []string {
-	entries, err := os.ReadDir(workspace)
-	if err != nil {
-		return nil
-	}
-	var logs []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".log") {
-			logs = append(logs, e.Name())
-		}
-	}
-	sort.Strings(logs)
-	return logs
-}
-
-// listWorkspaceDocs returns sorted .md filenames inside workspace/workspace/.
-func listWorkspaceDocs(workspace string) []string {
-	entries, err := os.ReadDir(workspace + "/workspace")
-	if err != nil {
-		return nil
-	}
-	var docs []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			docs = append(docs, e.Name())
-		}
-	}
-	sort.Strings(docs)
-	return docs
-}
-
-func (m Model) viewAgentOutput(t task.Task, _ task.Agent) string {
-	h := m.height - 2
-	headerH := 2
-	footerH := 2
-	contentH := h - headerH - footerH
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	// Choose doc list and file directory based on source
-	var docs []string
-	var fileDir string
-	var sourceLabel string
-	if m.multiDocSource == "messages" {
-		docs = listMsgChannels(t.Workspace)
-		fileDir = t.Workspace + "/messages/"
-		sourceLabel = "messages"
-	} else if m.multiDocSource == "logs" {
-		docs = listLogFiles(t.Workspace)
-		fileDir = t.Workspace + "/"
-		sourceLabel = "logs"
-	} else {
-		docs = listWorkspaceDocs(t.Workspace)
-		fileDir = t.Workspace + "/workspace/"
-		sourceLabel = "workspace"
-	}
-
-	var filePath, fileName string
-	if len(docs) == 0 {
-		filePath = ""
-		fileName = "—"
-	} else {
-		idx := m.multiDocIdx
-		if idx >= len(docs) {
-			idx = 0
-		}
-		fileName = docs[idx]
-		filePath = fileDir + fileName
-	}
-
-	// Read file — refreshed on every tick
-	raw, err := os.ReadFile(filePath)
-	var allLines []string
-	if err != nil || filePath == "" {
-		allLines = []string{"", "  " + DimText.Render("sin output aún…")}
-	} else {
-		contentWidth := m.width - 2
-		if contentWidth < 1 {
-			contentWidth = 1
-		}
-		for _, l := range strings.Split(string(raw), "\n") {
-			wrapped := ansi.Wrap(l, contentWidth, " ")
-			for _, wl := range strings.Split(wrapped, "\n") {
-				if m.multiDocSource == "messages" && strings.HasPrefix(strings.TrimSpace(wl), "###") {
-					allLines = append(allLines, " "+SectionHeader.Render(wl))
-				} else {
-					allLines = append(allLines, " "+wl)
-				}
-			}
-		}
-	}
-
-	// Scroll: offset 0 = tail, increasing offset scrolls up
-	total := len(allLines)
-	off := m.multiAgentScrollOffset
-	start := total - contentH - off
-	if start < 0 {
-		start = 0
-	}
-	end := start + contentH
-	if end > total {
-		end = total
-	}
-	visible := allLines[start:end]
-	for len(visible) < contentH {
-		visible = append(visible, "")
-	}
-
-	// Header
-	docPos := ""
-	if len(docs) > 0 {
-		idx := m.multiDocIdx
-		if idx >= len(docs) {
-			idx = 0
-		}
-		docPos = DimText.Render(fmt.Sprintf("  %d/%d", idx+1, len(docs)))
-	}
-
-	breadcrumb := fmt.Sprintf("← %s / %s / %s", t.TaskID, sourceLabel, fileName)
-	header1 := " " + ViewActive.Render(breadcrumb) + docPos
-
-	// Show agent status only for workspace docs (messages have no .status file)
-	if m.multiDocSource != "messages" {
-		agentID := strings.TrimSuffix(fileName, ".md")
-		agentStatus := task.AgentStatus(t.Workspace, agentID)
-		var statusStr string
-		switch agentStatus {
-		case "done", "completed":
-			statusStr = StatusGreen.Render("✔ " + agentStatus)
-		case "working":
-			statusStr = StatusYellow.Render("◉ " + agentStatus + " " + spinFrames[m.spinIdx])
-		case "—":
-			statusStr = ""
-		default:
-			statusStr = DimText.Render("◌ " + agentStatus)
-		}
-		if statusStr != "" {
-			header1 += "   " + statusStr
-		}
-	}
-
-	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
-
-	var out []string
-	out = append(out, header1)
-	out = append(out, header2)
-	out = append(out, visible...)
-
-	// Footer
-	scrollHint := ""
-	if off > 0 {
-		scrollHint = fmt.Sprintf("  [+%d líneas]", off)
-	}
-	navHint := "←/→ documento  ↑/↓ scroll  PgUp/PgDn saltar" + scrollHint + "  Esc volver  Ctrl+Q salir"
-	out = append(out, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	out = append(out, " "+DimText.Render(navHint))
-
-	return strings.Join(out, "\n")
-}
 
 // countMsgsInFile counts occurrences of "### [" in the given file (message headers).
 func countMsgsInFile(path string) int {
@@ -436,13 +278,13 @@ func countMsgsInFile(path string) int {
 }
 
 // renderNetworkGraph renders the Command Center table view for the given task.
-// selectedChannel is the basename of the currently selected messages/*.md file.
 // Returns a slice of lines of width w.
-func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChannel string, w, h int) []string {
+func (m Model) renderNetworkGraph(t task.Task, w, h, cursorIdx int) []string {
 	if w < 10 {
 		w = 10
 	}
 
+	channels := listMsgChannels(t.Workspace)
 	agents := task.AllAgents(t)
 
 	// Parse channels into from/to pairs with message counts
@@ -503,60 +345,25 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 
 	var lines []string
 
-	// ══ COMMAND CENTER ═...═ ◉ N UNITS ══
+	// ══ COMMAND CENTER ═...═ ◉ N AGENTE ══
 	nUnits := len(agents)
 	leftPart := "══ COMMAND CENTER "
-	rightPart := fmt.Sprintf(" ◉ %d UNITS ══", nUnits)
+	rightPart := fmt.Sprintf(" ◉ %d AGENTE ══", nUnits)
 	fillW := w - len([]rune(leftPart)) - len([]rune(rightPart))
 	if fillW < 2 {
 		fillW = 2
 	}
-	headerRaw := leftPart + strings.Repeat("═", fillW) + rightPart
-	lines = append(lines, ViewActive.Render(headerRaw))
-
+	lines = append(lines, ViewActive.Render(leftPart+strings.Repeat("═", fillW)+rightPart))
 	lines = append(lines, "")
 
-	// Director row
-	dirStatus := task.AgentStatus(t.Workspace, "director")
-	var dirBullet string
-	var dirStyle lipgloss.Style
-	switch dirStatus {
-	case "done", "completed":
-		dirBullet = "✔"
-		dirStyle = StatusGreen
-	case "working":
-		dirBullet = spinFrames[m.spinIdx]
-		dirStyle = StatusYellow
-	default:
-		dirBullet = "◌"
-		dirStyle = DimText
-	}
-	dirLine := "  " + dirStyle.Render(dirBullet) + "  " +
-		ViewActive.Render(rpad("DIRECTOR", 14)) +
-		"  " + dirStyle.Render(rpad(dirStatus, 12)) +
-		"  " + DimText.Render(fmt.Sprintf("%-8d", msgsIn("director"))) +
-		"  " + DimText.Render(fmt.Sprintf("%d", msgsOut("director")))
-	lines = append(lines, dirLine)
-
-	// Separator
-	sepW := w - 4
-	if sepW < 2 {
-		sepW = 2
-	}
-	lines = append(lines, "  "+DimText.Render(strings.Repeat("─", sepW)))
-
-	// Table header
+	// Tabla de agentes (todos al mismo nivel, incluido director)
 	lines = append(lines, "  "+
-		SectionHeader.Render(rpad("UNIT", 16))+
+		SectionHeader.Render(rpad("AGENTE", 16))+
 		SectionHeader.Render(rpad("STATUS", 14))+
-		SectionHeader.Render(rpad("MSGS IN", 10))+
-		SectionHeader.Render("MSGS OUT"))
+		SectionHeader.Render(rpad("IN", 6))+
+		SectionHeader.Render("OUT"))
 
-	// Agent rows (non-director)
-	for _, a := range agents {
-		if a.ID == "director" {
-			continue
-		}
+	for i, a := range agents {
 		status := task.AgentStatus(t.Workspace, a.ID)
 		var bullet string
 		var aStyle lipgloss.Style
@@ -572,14 +379,49 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 			aStyle = DimText
 		}
 		idTrunc := truncate(a.ID, 14)
-		row := "  " + aStyle.Render(bullet) + " " +
-			DimText.Render(rpad(idTrunc, 15)) +
-			" " + aStyle.Render(rpad(status, 13)) +
-			" " + DimText.Render(fmt.Sprintf("%-10d", msgsIn(a.ID))) +
-			DimText.Render(fmt.Sprintf("%d", msgsOut(a.ID)))
-		lines = append(lines, row)
+		prefix := "  "
+		if i == cursorIdx {
+			prefix = ViewActive.Render("❯ ")
+		}
+		lines = append(lines, prefix+aStyle.Render(bullet)+" "+
+			DimText.Render(rpad(idTrunc, 15))+
+			" "+aStyle.Render(rpad(status, 13))+
+			" "+DimText.Render(fmt.Sprintf("%-6d", msgsIn(a.ID)))+
+			DimText.Render(fmt.Sprintf("%d", msgsOut(a.ID))))
 	}
 
+	lines = append(lines, "")
+
+	// Archivos del workspace y de comunicación
+	docs := listWorkspaceFiles(t.Workspace)
+	msgs := listMsgChannels(t.Workspace)
+
+	lines = append(lines, "  "+SectionHeader.Render("ARCHIVOS"))
+	if len(docs) == 0 {
+		lines = append(lines, "  "+DimText.Render("sin archivos"))
+	} else {
+		for i, d := range docs {
+			globalIdx := len(agents) + i
+			prefix := "  "
+			if globalIdx == cursorIdx {
+				prefix = ViewActive.Render("❯ ")
+			}
+			lines = append(lines, prefix+DimText.Render("· "+d))
+		}
+	}
+
+	if len(msgs) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "  "+SectionHeader.Render("MENSAJES"))
+		for i, d := range msgs {
+			globalIdx := len(agents) + len(docs) + i
+			prefix := "  "
+			if globalIdx == cursorIdx {
+				prefix = ViewActive.Render("❯ ")
+			}
+			lines = append(lines, prefix+DimText.Render("· "+strings.TrimSuffix(d, ".md")))
+		}
+	}
 	lines = append(lines, "")
 
 	for len(lines) < h {
@@ -591,13 +433,172 @@ func (m Model) renderNetworkGraph(t task.Task, channels []string, selectedChanne
 	return lines
 }
 
+func (m Model) viewTmuxPeek() string {
+	h := m.height - 2
+	headerH := 2
+	footerH := 1
+	contentH := h - headerH - footerH
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	label := m.multiDetailSession
+	header1 := " " + ViewActive.Render("← "+label)
+	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
+
+	var out []string
+	out = append(out, header1, header2)
+
+	if m.multiDetailTmuxRendering {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		sp := spinner[m.tickCount%len(spinner)]
+		for i := 0; i < contentH; i++ {
+			if i == contentH/2 {
+				out = append(out, "  "+DimText.Render(sp+" capturando sesión…"))
+			} else {
+				out = append(out, "")
+			}
+		}
+	} else {
+		allLines := m.multiDetailTmuxLines
+		total := len(allLines)
+		off := m.multiDetailScrollOffset
+		start := total - contentH - off
+		if start < 0 {
+			start = 0
+		}
+		end := start + contentH
+		if end > total {
+			end = total
+		}
+		visible := allLines[start:end]
+		for len(visible) < contentH {
+			visible = append(visible, "")
+		}
+		out = append(out, visible...)
+	}
+
+	out = append(out, FooterStyle.Width(m.width).Render("↑/↓ scroll   PgUp/PgDn saltar   Esc volver   Ctrl+Q salir"))
+	if len(out) > h {
+		out = out[:h]
+	}
+	return strings.Join(out, "\n")
+}
+
+// captureSessionCmd runs tmux capture-pane in a goroutine and returns a tmuxCapturedMsg.
+func captureSessionCmd(sessionID string, width int) tea.Cmd {
+	return func() tea.Msg {
+		raw, err := osexec.Command("tmux", "capture-pane", "-t", sessionID, "-p", "-e", "-S", "-500").Output()
+		var lines []string
+		if err != nil {
+			lines = []string{"", "  sesión no disponible: " + sessionID}
+		} else {
+			stripped := ansi.Strip(string(raw))
+			contentWidth := width - 2
+			if contentWidth < 1 {
+				contentWidth = 1
+			}
+			for _, l := range strings.Split(stripped, "\n") {
+				wrapped := ansi.Wrap(l, contentWidth, " ")
+				for _, wl := range strings.Split(wrapped, "\n") {
+					lines = append(lines, " "+wl)
+				}
+			}
+		}
+		return tmuxCapturedMsg{sessionID: sessionID, lines: lines}
+	}
+}
+
+func (m Model) viewFileContent() string {
+	h := m.height - 2
+	headerH := 2
+	footerH := 1
+	contentH := h - headerH - footerH
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	filePath := m.multiDetailFile
+	label := filePath
+	if idx := strings.LastIndex(filePath, "/"); idx >= 0 {
+		label = filePath[idx+1:]
+	}
+	label = strings.TrimSuffix(label, ".md")
+
+	header1 := " " + ViewActive.Render("← "+label)
+	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
+
+	var out []string
+	out = append(out, header1, header2)
+
+	if m.multiDetailRendering {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		sp := spinner[m.tickCount%len(spinner)]
+		for i := 0; i < contentH; i++ {
+			if i == contentH/2 {
+				out = append(out, "  "+DimText.Render(sp+" renderizando…"))
+			} else {
+				out = append(out, "")
+			}
+		}
+	} else {
+		allLines := m.multiDetailRendered
+		total := len(allLines)
+		off := m.multiDetailScrollOffset
+		start := total - contentH - off
+		if start < 0 {
+			start = 0
+		}
+		end := start + contentH
+		if end > total {
+			end = total
+		}
+		visible := allLines[start:end]
+		for len(visible) < contentH {
+			visible = append(visible, "")
+		}
+		out = append(out, visible...)
+	}
+
+	out = append(out, FooterStyle.Width(m.width).Render("↑/↓ scroll   PgUp/PgDn saltar   Esc volver   Ctrl+Q salir"))
+	if len(out) > h {
+		out = out[:h]
+	}
+	return strings.Join(out, "\n")
+}
+
+// renderFileCmd lee y renderiza un .md con glamour en un goroutine y devuelve fileRenderedMsg.
+func renderFileCmd(path string, width int) tea.Cmd {
+	return func() tea.Msg {
+		raw, err := os.ReadFile(path)
+		var lines []string
+		if err != nil {
+			lines = []string{"", "  no se pudo leer el archivo"}
+			return fileRenderedMsg{path: path, lines: lines}
+		}
+		renderer, rerr := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("light"),
+			glamour.WithWordWrap(width),
+		)
+		var rendered string
+		if rerr == nil {
+			rendered, _ = renderer.Render(string(raw))
+		} else {
+			rendered = string(raw)
+		}
+		for _, l := range strings.Split(rendered, "\n") {
+			lines = append(lines, l)
+		}
+		return fileRenderedMsg{path: path, lines: lines}
+	}
+}
+
 // viewNetworkDetail — full-width animated network graph view.
 func (m Model) viewNetworkDetail(t task.Task) string {
 	h := m.height - 2
 	headerH := 2
-	edgeBarH := 2 // edge info line + its separator
-	footerH := 3  // chat-input + sep + footer-hint
-	contentH := h - headerH - edgeBarH - footerH
+	footerH := 1
+	contentH := h - headerH - footerH
 	if contentH < 3 {
 		contentH = 3
 	}
@@ -607,7 +608,6 @@ func (m Model) viewNetworkDetail(t task.Task) string {
 		statusLabel = "—"
 	}
 
-	// Live agent summary for header
 	agents := task.AllAgents(t)
 	nWorking := 0
 	nDone := 0
@@ -636,552 +636,19 @@ func (m Model) viewNetworkDetail(t task.Task) string {
 	header1 := " " + ViewActive.Render(breadcrumb) + "  " + DimText.Render("["+statusLabel+"]") + agentSummary
 	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
 
-	channels := listMsgChannels(t.Workspace)
-	activeCh := 0
-	if len(channels) > 0 {
-		activeCh = m.activeMsgChannel % len(channels)
-	}
-	selectedChannel := ""
-	if activeCh < len(channels) {
-		selectedChannel = channels[activeCh]
-	}
-
-	// Full-width network graph
-	graphLines := m.renderNetworkGraph(t, channels, selectedChannel, m.width-2, contentH)
-
-	// Edge info bar
-	edgeSep := " " + SepDim.Render(strings.Repeat("─", m.width-2))
-	edgeInfo := m.renderEdgeInfo(t, selectedChannel, channels, activeCh)
-
-	// Chat input + footer
-	hint := "Tab/←/→ canal   Enter leer canal   o workspace agente   l logs   f/i escribir   Esc volver   Ctrl+Q salir"
+	graphLines := m.renderNetworkGraph(t, m.width-2, contentH, m.multiDetailCursorIdx)
 
 	var all []string
 	all = append(all, header1, header2)
 	for _, gl := range graphLines {
 		all = append(all, " "+gl)
 	}
-	all = append(all, edgeSep, edgeInfo)
-	all = append(all, m.viewNetworkChatInput())
-	all = append(all, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-	all = append(all, FooterStyle.Width(m.width).Render(hint))
+	all = append(all, FooterStyle.Width(m.width).Render("Esc volver   Ctrl+Q salir"))
 
 	if len(all) > h {
 		all = all[:h]
 	}
 	return strings.Join(all, "\n")
-}
-
-// renderEdgeInfo renders the edge info bar showing the selected channel and message count.
-func (m Model) renderEdgeInfo(t task.Task, selectedChannel string, channels []string, activeCh int) string {
-	if len(channels) == 0 || selectedChannel == "" {
-		return FooterStyle.Width(m.width).Render("  sin canales de comunicación")
-	}
-
-	chName := strings.TrimSuffix(selectedChannel, ".md")
-	count := countMsgsInFile(t.Workspace + "/messages/" + selectedChannel)
-
-	var countStr string
-	switch count {
-	case 0:
-		countStr = DimText.Render("sin mensajes")
-	case 1:
-		countStr = ViewActive.Render("1 mensaje")
-	default:
-		countStr = ViewActive.Render(fmt.Sprintf("%d mensajes", count))
-	}
-
-	pos := DimText.Render(fmt.Sprintf("[%d/%d]", activeCh+1, len(channels)))
-
-	// Pulse animation when one of the channel's agents is working
-	pulse := ""
-	chBase := strings.TrimSuffix(selectedChannel, ".md")
-	var from, to string
-	if idx := strings.Index(chBase, "→"); idx >= 0 {
-		from = chBase[:idx]
-		to = chBase[idx+len("→"):]
-	} else if idx := strings.Index(chBase, "->"); idx >= 0 {
-		from = chBase[:idx]
-		to = chBase[idx+2:]
-	}
-	if from != "" || to != "" {
-		fs := task.AgentStatus(t.Workspace, from)
-		ts := task.AgentStatus(t.Workspace, to)
-		if fs == "working" || ts == "working" {
-			pulse = "  " + StatusYellow.Render(spinFrames[m.spinIdx]+" activo")
-		}
-	}
-
-	line := fmt.Sprintf("  ❯ %s  %s  %s%s    %s",
-		ViewActive.Render(chName),
-		countStr,
-		pos,
-		pulse,
-		DimText.Render("Enter para leer completo"),
-	)
-	return FooterStyle.Width(m.width).Render(line)
-}
-
-// buildNetworkThreadPanel renders the right-side thread panel for the selected channel.
-func (m Model) buildNetworkThreadPanel(t task.Task, selectedChannel string, w, h int) []string {
-	var lines []string
-
-	// Header
-	chName := selectedChannel
-	if chName == "" {
-		chName = "—"
-	} else {
-		chName = strings.TrimSuffix(chName, ".md")
-	}
-	lines = append(lines, ViewActive.Render(" ❯ "+chName))
-	lines = append(lines, " "+SepActive.Render(strings.Repeat("━", w-2)))
-
-	chatH := h - len(lines)
-	if chatH < 1 {
-		chatH = 1
-	}
-
-	var allLines []string
-	if selectedChannel == "" {
-		allLines = []string{" " + DimText.Render("sin canal seleccionado")}
-	} else {
-		filePath := t.Workspace + "/messages/" + selectedChannel
-		raw, err := os.ReadFile(filePath)
-		if err != nil {
-			allLines = []string{" " + DimText.Render("sin mensajes aún…")}
-		} else {
-			contentWidth := w - 2
-			if contentWidth < 1 {
-				contentWidth = 1
-			}
-			for _, l := range strings.Split(string(raw), "\n") {
-				wrapped := ansi.Wrap(l, contentWidth, " ")
-				for _, wl := range strings.Split(wrapped, "\n") {
-					if strings.HasPrefix(strings.TrimSpace(wl), "###") {
-						allLines = append(allLines, " "+SectionHeader.Render(wl))
-					} else if wl == "" {
-						allLines = append(allLines, "")
-					} else {
-						allLines = append(allLines, " "+DimText.Render(wl))
-					}
-				}
-			}
-		}
-	}
-
-	total := len(allLines)
-	off := m.taskChatScrollOffset
-	start := total - chatH - off
-	if start < 0 {
-		start = 0
-	}
-	end := start + chatH
-	if end > total {
-		end = total
-	}
-	visible := make([]string, end-start)
-	copy(visible, allLines[start:end])
-	for len(visible) < chatH {
-		visible = append(visible, "")
-	}
-	lines = append(lines, visible...)
-
-	for len(lines) < h {
-		lines = append(lines, "")
-	}
-	return lines[:h]
-}
-
-// viewNetworkChatInput renders the chat input bar for the network view.
-func (m Model) viewNetworkChatInput() string {
-	if !m.taskChatFocused {
-		return FooterStyle.Width(m.width).Render("Tab/←/→ canal   ↑/↓ scroll   f/i escribir")
-	}
-
-	buf := m.taskChatInput
-	cursor := m.taskChatCursorPos
-	if cursor > len(buf) {
-		cursor = len(buf)
-	}
-
-	before := buf[:cursor]
-	var cursorChar, after string
-	if cursor < len(buf) {
-		cursorChar = string(buf[cursor])
-		after = buf[cursor+1:]
-	}
-
-	var rendered string
-	if cursorChar != "" {
-		rendered = before + InputCursor.Render(cursorChar) + after
-	} else {
-		rendered = before + InputCursor.Render(" ")
-	}
-
-	content := InputPrompt.Render("> ") + rendered
-	return InputStyle.Width(m.width).Render(content)
-}
-
-func (m Model) viewTaskDetail(t task.Task) string {
-	h := m.height - 2
-
-	statusLabel := t.CoordinatorStatus
-	if statusLabel == "" {
-		statusLabel = "—"
-	}
-	breadcrumb := fmt.Sprintf("← Agente / %s  [%s]", t.TaskID, statusLabel)
-	header1 := " " + ViewActive.Render(breadcrumb)
-	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
-
-	// Content area: total height minus header(2) + input(1) + footer-sep(1)
-	contentH := h - 4
-	if contentH < 3 {
-		contentH = 3
-	}
-
-	listW := 30
-	divW := 1
-	msgW := m.width - listW - divW
-	if msgW < 24 {
-		msgW = 24
-		listW = m.width - msgW - divW
-	}
-
-	leftLines := m.buildAgentListPanel(t, listW, contentH)
-	rightLines := m.buildMsgPanel(t, msgW, contentH)
-
-	div := SepDim.Render("│")
-	var bodyLines []string
-	for i := 0; i < contentH; i++ {
-		var l, r string
-		if i < len(leftLines) {
-			l = leftLines[i]
-		}
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		bodyLines = append(bodyLines, lipgloss.NewStyle().Width(listW).Render(l)+div+r)
-	}
-
-	all := []string{header1, header2}
-	all = append(all, bodyLines...)
-	all = append(all, m.viewChatInput())
-	all = append(all, " "+SepDim.Render(strings.Repeat("─", m.width-2)))
-
-	if len(all) > h {
-		all = all[:h]
-	}
-	return strings.Join(all, "\n")
-}
-
-func (m Model) buildAgentListPanel(t task.Task, w int, h int) []string {
-	agents := task.AllAgents(t)
-	var lines []string
-
-	if m.taskSectionFocus == 0 {
-		lines = append(lines, ViewActive.Render(" ❯ AGENTES"))
-		lines = append(lines, " "+SepActive.Render(strings.Repeat("━", w-2)))
-	} else {
-		lines = append(lines, DimText.Render("   AGENTES"))
-		lines = append(lines, " "+SepDim.Render(strings.Repeat("─", w-2)))
-	}
-
-	for i, a := range agents {
-		status := task.AgentStatus(t.Workspace, a.ID)
-		var bullet string
-		switch status {
-		case "done", "completed":
-			bullet = StatusGreen.Render("✔")
-		case "working":
-			bullet = StatusYellow.Render("◉")
-		default:
-			bullet = DimText.Render("◌")
-		}
-
-		id := a.ID
-		maxLen := w - 7
-		if maxLen < 4 {
-			maxLen = 4
-		}
-		if len(id) > maxLen {
-			id = id[:maxLen-1] + "…"
-		}
-
-		selected := i == m.multiAgentIdx && m.taskSectionFocus == 0
-		if selected {
-			lines = append(lines, fmt.Sprintf(" ❯ %s %s", bullet, ViewActive.Render(id)))
-		} else {
-			lines = append(lines, fmt.Sprintf("   %s %s", bullet, id))
-		}
-	}
-
-	for len(lines) < h {
-		lines = append(lines, "")
-	}
-	return lines[:h]
-}
-
-func (m Model) buildMsgPanel(t task.Task, w int, h int) []string {
-	channels := listMsgChannels(t.Workspace)
-	activeCh := 0
-	if len(channels) > 0 {
-		activeCh = m.activeMsgChannel % len(channels)
-	}
-
-	var lines []string
-
-	if m.taskSectionFocus == 1 {
-		lines = append(lines, ViewActive.Render(" ❯ MENSAJES"))
-		lines = append(lines, " "+SepActive.Render(strings.Repeat("━", w-2)))
-	} else {
-		lines = append(lines, DimText.Render("   MENSAJES"))
-		lines = append(lines, " "+SepDim.Render(strings.Repeat("─", w-2)))
-	}
-
-	if len(channels) == 0 {
-		lines = append(lines, " "+DimText.Render("sin canales"))
-	} else {
-		sep := TabSeparator.Render(" │ ")
-		var parts []string
-		for i, ch := range channels {
-			name := strings.TrimSuffix(ch, ".md")
-			if len([]rune(name)) > 14 {
-				name = string([]rune(name)[:13]) + "…"
-			}
-			if i == activeCh {
-				parts = append(parts, ViewActive.Render(name))
-			} else {
-				parts = append(parts, ViewInactive.Render(name))
-			}
-			if i < len(channels)-1 {
-				parts = append(parts, sep)
-			}
-		}
-		lines = append(lines, " "+strings.Join(parts, ""))
-	}
-	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", w-2)))
-
-	chatH := h - len(lines)
-	if chatH < 1 {
-		chatH = 1
-	}
-
-	var allLines []string
-	if len(channels) == 0 {
-		allLines = []string{" " + DimText.Render("sin mensajes")}
-	} else if activeCh < len(channels) {
-		filePath := t.Workspace + "/messages/" + channels[activeCh]
-		raw, err := os.ReadFile(filePath)
-		if err != nil {
-			allLines = []string{" " + DimText.Render("sin mensajes aún…")}
-		} else {
-			contentWidth := w - 2
-			if contentWidth < 1 {
-				contentWidth = 1
-			}
-			for _, l := range strings.Split(string(raw), "\n") {
-				wrapped := ansi.Wrap(l, contentWidth, " ")
-				for _, wl := range strings.Split(wrapped, "\n") {
-					if strings.HasPrefix(strings.TrimSpace(wl), "#") {
-						allLines = append(allLines, " "+SectionHeader.Render(wl))
-					} else if wl == "" {
-						allLines = append(allLines, "")
-					} else {
-						allLines = append(allLines, " "+DimText.Render(wl))
-					}
-				}
-			}
-		}
-	}
-
-	total := len(allLines)
-	off := m.taskChatScrollOffset
-	start := total - chatH - off
-	if start < 0 {
-		start = 0
-	}
-	end := start + chatH
-	if end > total {
-		end = total
-	}
-	visible := make([]string, end-start)
-	copy(visible, allLines[start:end])
-	for len(visible) < chatH {
-		visible = append(visible, "")
-	}
-	lines = append(lines, visible...)
-
-	for len(lines) < h {
-		lines = append(lines, "")
-	}
-	return lines[:h]
-}
-
-// viewOfficeFloor renders an animated grid of agent desks.
-func (m Model) viewOfficeFloor(t task.Task) string {
-	agents := task.AllAgents(t)
-	if len(agents) == 0 {
-		return "  " + DimText.Render("sin agentes registrados") + "\n"
-	}
-
-	const deskW = 24
-	const deskGap = 1
-	desksPerRow := m.width / (deskW + deskGap)
-	if desksPerRow < 1 {
-		desksPerRow = 1
-	}
-
-	var out []string
-	out = append(out, "  "+SectionHeader.Render(fmt.Sprintf("⬡  OFFICE FLOOR  %d agentes", len(agents))))
-
-	for rowStart := 0; rowStart < len(agents); rowStart += desksPerRow {
-		rowEnd := rowStart + desksPerRow
-		if rowEnd > len(agents) {
-			rowEnd = len(agents)
-		}
-		rowAgents := agents[rowStart:rowEnd]
-
-		// Render each desk as a multi-line string
-		deskStrings := make([]string, len(rowAgents))
-		for i, a := range rowAgents {
-			globalIdx := rowStart + i
-			status := task.AgentStatus(t.Workspace, a.ID)
-			isDirector := a.ID == "director" || a.IsSynthesizer
-			var frame string
-			if isDirector {
-				frame = spriteDirector[m.spriteIdx]
-			} else {
-				frame = agentSpriteFrame(status, m.spriteIdx)
-			}
-			selected := globalIdx == m.multiAgentIdx
-			deskLines := renderDeskBox(a, status, frame, isDirector, deskW, selected)
-			deskStrings[i] = strings.Join(deskLines, "\n")
-		}
-
-		// Join desks side by side with a gap
-		rowStr := lipgloss.JoinHorizontal(lipgloss.Top, deskStrings...)
-		out = append(out, rowStr)
-	}
-
-	return strings.Join(out, "\n")
-}
-
-// viewMsgChannelTabs renders a navigable tab bar for message channels.
-func (m Model) viewMsgChannelTabs(channels []string) string {
-	if len(channels) == 0 {
-		return "  " + DimText.Render("sin canales de mensajes")
-	}
-
-	active := m.activeMsgChannel % len(channels)
-
-	sep := TabSeparator.Render(" │ ")
-	var parts []string
-	for i, ch := range channels {
-		name := ch
-		if len([]rune(name)) > 28 {
-			name = string([]rune(name)[:27]) + "…"
-		}
-		if i == active {
-			parts = append(parts, ViewActive.Render(name))
-		} else {
-			parts = append(parts, ViewInactive.Render(name))
-		}
-		if i < len(channels)-1 {
-			parts = append(parts, sep)
-		}
-	}
-	return "  " + strings.Join(parts, "")
-}
-
-// viewChatPanel renders the selected channel file as a scrollable chat panel.
-func (m Model) viewChatPanel(workspace, channelFile string, contentH int) string {
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	var allLines []string
-
-	if channelFile == "" {
-		allLines = []string{"  " + DimText.Render("↑ selecciona un canal con Tab")}
-	} else {
-		filePath := workspace + "/messages/" + channelFile
-		raw, err := os.ReadFile(filePath)
-		if err != nil {
-			allLines = []string{"  " + DimText.Render("sin mensajes aún…")}
-		} else {
-			contentWidth := m.width - 2
-			if contentWidth < 1 {
-				contentWidth = 1
-			}
-			for _, l := range strings.Split(string(raw), "\n") {
-				wrapped := ansi.Wrap(l, contentWidth, " ")
-				for _, wl := range strings.Split(wrapped, "\n") {
-					if strings.HasPrefix(strings.TrimSpace(wl), "#") {
-						allLines = append(allLines, " "+SectionHeader.Render(wl))
-					} else if wl == "" {
-						allLines = append(allLines, "")
-					} else {
-						allLines = append(allLines, " "+DimText.Render(wl))
-					}
-				}
-			}
-		}
-	}
-
-	// Scroll: offset 0 = tail, increasing offset scrolls up
-	total := len(allLines)
-	off := m.taskChatScrollOffset
-	start := total - contentH - off
-	if start < 0 {
-		start = 0
-	}
-	end := start + contentH
-	if end > total {
-		end = total
-	}
-
-	visible := make([]string, end-start)
-	copy(visible, allLines[start:end])
-	for len(visible) < contentH {
-		visible = append(visible, "")
-	}
-
-	return strings.Join(visible, "\n")
-}
-
-// viewChatInput renders the chat input bar (focused or hint mode).
-func (m Model) viewChatInput() string {
-	if !m.taskChatFocused {
-		sectionHint := "foco: AGENTES"
-		if m.taskSectionFocus == 1 {
-			sectionHint = "foco: MENSAJES"
-		}
-		hint := sectionHint + "  Ctrl+Shift+↑↓ cambiar  ↑↓ navegar  ←/→ canal  f/i escribir  Esc volver  Ctrl+Q salir"
-		return FooterStyle.Width(m.width).Render(hint)
-	}
-
-	buf := m.taskChatInput
-	cursor := m.taskChatCursorPos
-	if cursor > len(buf) {
-		cursor = len(buf)
-	}
-
-	before := buf[:cursor]
-	var cursorChar, after string
-	if cursor < len(buf) {
-		cursorChar = string(buf[cursor])
-		after = buf[cursor+1:]
-	}
-
-	var rendered string
-	if cursorChar != "" {
-		rendered = before + InputCursor.Render(cursorChar) + after
-	} else {
-		rendered = before + InputCursor.Render(" ")
-	}
-
-	content := InputPrompt.Render("> ") + rendered
-	return InputStyle.Width(m.width).Render(content)
 }
 
 func formatTaskDate(created string) string {
