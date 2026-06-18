@@ -906,7 +906,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						m.multiDetailScrollOffset = 0
 						m.multiDetailRendered = nil
 						m.multiDetailRendering = true
-						return m, renderFileCmd(fp, m.width-4)
+						return m, renderFileCmd(fp, m.width-4, m.cfg.DarkMode)
 					}
 				}
 			}

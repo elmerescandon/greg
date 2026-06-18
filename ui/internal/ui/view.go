@@ -568,7 +568,7 @@ func (m Model) viewFileContent() string {
 }
 
 // renderFileCmd lee y renderiza un .md con glamour en un goroutine y devuelve fileRenderedMsg.
-func renderFileCmd(path string, width int) tea.Cmd {
+func renderFileCmd(path string, width int, dark bool) tea.Cmd {
 	return func() tea.Msg {
 		raw, err := os.ReadFile(path)
 		var lines []string
@@ -576,8 +576,12 @@ func renderFileCmd(path string, width int) tea.Cmd {
 			lines = []string{"", "  no se pudo leer el archivo"}
 			return fileRenderedMsg{path: path, lines: lines}
 		}
+		glamourStyle := "light"
+		if dark {
+			glamourStyle = "dark"
+		}
 		renderer, rerr := glamour.NewTermRenderer(
-			glamour.WithStandardStyle("light"),
+			glamour.WithStandardStyle(glamourStyle),
 			glamour.WithWordWrap(width),
 		)
 		var rendered string
