@@ -711,6 +711,15 @@ func (m *Model) submitAnswer() tea.Cmd {
 	return nil
 }
 
+func (m *Model) closeCodingTerm() {
+	if m.codingTermPaneID != "" {
+		osexec.Command("tmux", "kill-pane", "-t", m.codingTermPaneID).Run()
+		m.codingTermPaneID = ""
+	}
+	m.multiDetailMode = false
+	m.multiDetailCursorIdx = 0
+}
+
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	t := m.tab()
 	k := msg.String()
@@ -777,20 +786,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, readClipboardCmd()
 
 	case "ctrl+shift+right":
+		m.closeCodingTerm()
 		m.viewMode = ViewMode((int(m.viewMode) + 1) % 4)
 		return m, nil
 
 	case "ctrl+shift+left":
+		m.closeCodingTerm()
 		m.viewMode = ViewMode((int(m.viewMode) + 3) % 4)
 		return m, nil
 
 	case "ctrl+alt+right":
+		m.closeCodingTerm()
 		if len(m.tabs) > 1 {
 			m.tabIdx = (m.tabIdx + 1) % len(m.tabs)
 		}
 		return m, nil
 
 	case "ctrl+alt+left":
+		m.closeCodingTerm()
 		if len(m.tabs) > 1 {
 			m.tabIdx = (m.tabIdx - 1 + len(m.tabs)) % len(m.tabs)
 		}
@@ -1013,12 +1026,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			switch k {
 			case "escape", "backspace":
-				if m.codingTermPaneID != "" {
-					osexec.Command("tmux", "kill-pane", "-t", m.codingTermPaneID).Run()
-					m.codingTermPaneID = ""
-				}
-				m.multiDetailMode = false
-				m.multiDetailCursorIdx = 0
+				m.closeCodingTerm()
 			case "up":
 				if m.multiDetailCursorIdx > 0 {
 					m.multiDetailCursorIdx--
