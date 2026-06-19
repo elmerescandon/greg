@@ -30,12 +30,13 @@ const (
 
 // gregConfig holds persistent user preferences.
 type gregConfig struct {
-	DarkMode         bool   `json:"dark_mode"`
-	DefaultModel     string `json:"default_model"`
-	DefaultEffort    string `json:"default_effort"`
-	CompactWarnPct   int    `json:"compact_warn_pct"`
-	AutoCompact      bool   `json:"auto_compact"`
-	IdleTimeoutHours int    `json:"idle_timeout_hours"`
+	DarkMode         bool     `json:"dark_mode"`
+	DefaultModel     string   `json:"default_model"`
+	DefaultEffort    string   `json:"default_effort"`
+	CompactWarnPct   int      `json:"compact_warn_pct"`
+	AutoCompact      bool     `json:"auto_compact"`
+	IdleTimeoutHours int      `json:"idle_timeout_hours"`
+	CodingRepos      []string `json:"coding_repos"`
 }
 
 func defaultGregConfig() gregConfig {
@@ -143,6 +144,9 @@ type Model struct {
 	multiDetailTmuxRendering bool
 	cfg                   gregConfig
 	configCursorIdx       int
+	configRepoCursorIdx   int
+	configRepoInputMode   bool
+	configRepoInputBuf    string
 	tickCount             int
 }
 
@@ -612,6 +616,33 @@ func (m *Model) submitAnswer() {
 	q.Answers[qData.Question] = selected.Label
 	t.Lines = append(t.Lines, QuestionSelected.Render("  ✓ "+selected.Label))
 
+	if q.ID == "__mode__" {
+		t.PendingQuestion = nil
+		if selected.Label == "Coding" {
+			opts := make([]claude.Option, 0, len(m.cfg.CodingRepos)+1)
+			for _, r := range m.cfg.CodingRepos {
+				opts = append(opts, claude.Option{Label: r})
+			}
+			opts = append(opts, claude.Option{Label: "Vault (defecto)"})
+			m.showQuestion("__repo__", []claude.Question{
+				{
+					Question: "¿Qué repositorio?",
+					Header:   "Repo",
+					Options:  opts,
+				},
+			}, t)
+		}
+		return
+	}
+
+	if q.ID == "__repo__" {
+		t.PendingQuestion = nil
+		if selected.Label != "Vault (defecto)" {
+			t.CodeRepo = selected.Label
+		}
+		return
+	}
+
 	if q.ConfigMode {
 		if q.CurrentQ == 0 {
 			for _, mo := range ModelOptions {
@@ -714,6 +745,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		newT.Effort = m.cfg.DefaultEffort
 		m.tabs = append(m.tabs, newT)
 		m.tabIdx = len(m.tabs) - 1
+		m.showQuestion("__mode__", []claude.Question{
+			{
+				Question: "¿Qué tipo de sesión?",
+				Header:   "Modo",
+				Options: []claude.Option{
+					{Label: "Chat"},
+					{Label: "Coding"},
+				},
+			},
+		}, newT)
 		return m, nil
 
 	case "ctrl+w":
@@ -744,6 +785,66 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.viewMode == ViewConfig {
+		// Text input mode: capturing path for new coding repo
+		if m.configRepoInputMode {
+			switch k {
+			case "enter":
+				repo := strings.TrimSpace(m.configRepoInputBuf)
+				if repo != "" {
+					m.cfg.CodingRepos = append(m.cfg.CodingRepos, repo)
+					saveGregConfig(m.cfg)
+				}
+				m.configRepoInputMode = false
+				m.configRepoInputBuf = ""
+			case "escape":
+				m.configRepoInputMode = false
+				m.configRepoInputBuf = ""
+			case "backspace":
+				if len(m.configRepoInputBuf) > 0 {
+					m.configRepoInputBuf = m.configRepoInputBuf[:len(m.configRepoInputBuf)-1]
+				}
+			default:
+				if len(k) == 1 {
+					m.configRepoInputBuf += k
+				}
+			}
+			return m, nil
+		}
+
+		// Navigation within repos sub-list (item 6)
+		if m.configCursorIdx == 6 {
+			switch k {
+			case "up":
+				if m.configRepoCursorIdx > 0 {
+					m.configRepoCursorIdx--
+				} else {
+					m.configCursorIdx = 5
+				}
+			case "down":
+				if m.configRepoCursorIdx < len(m.cfg.CodingRepos) {
+					m.configRepoCursorIdx++
+				}
+			case "enter", " ", "right":
+				if m.configRepoCursorIdx == len(m.cfg.CodingRepos) {
+					m.configRepoInputMode = true
+					m.configRepoInputBuf = ""
+				}
+			case "backspace", "delete":
+				repos := m.cfg.CodingRepos
+				if m.configRepoCursorIdx < len(repos) {
+					m.cfg.CodingRepos = append(repos[:m.configRepoCursorIdx], repos[m.configRepoCursorIdx+1:]...)
+					if m.configRepoCursorIdx >= len(m.cfg.CodingRepos) && m.configRepoCursorIdx > 0 {
+						m.configRepoCursorIdx--
+					}
+					saveGregConfig(m.cfg)
+				}
+			case "escape":
+				m.viewMode = ViewMetricas
+			}
+			return m, nil
+		}
+
+		// Normal navigation (items 0-5)
 		switch k {
 		case "up":
 			if m.configCursorIdx > 0 {
@@ -752,6 +853,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "down":
 			if m.configCursorIdx < numConfigItems-1 {
 				m.configCursorIdx++
+				if m.configCursorIdx == 6 {
+					m.configRepoCursorIdx = 0
+				}
 			}
 		case "left":
 			m.cycleConfigItem(false)
@@ -1262,7 +1366,7 @@ func (m Model) outputHeight() int {
 	return m.height - 6
 }
 
-const numConfigItems = 6
+const numConfigItems = 7
 
 func modelIdx(id string) int {
 	for i, mo := range ModelOptions {
