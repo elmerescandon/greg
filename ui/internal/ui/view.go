@@ -1098,6 +1098,34 @@ func (m Model) viewConfig() string {
 		timeoutStr = "24 horas"
 	}
 	lines = append(lines, renderItem(5, "Timeout idle", timeoutStr, "sesiones sin abrir se archivan"))
+	lines = append(lines, "")
+
+	// 6: Repos de código
+	if m.configCursorIdx == 6 {
+		lines = append(lines, "  "+ViewActive.Render("▶")+" "+ModelStyle.Render(fmt.Sprintf("%-22s", "Repos de código")))
+		for i, repo := range m.cfg.CodingRepos {
+			if m.configRepoCursorIdx == i {
+				lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(repo))
+			} else {
+				lines = append(lines, "        "+QuestionLabelDim.Render(repo))
+			}
+		}
+		addSlot := len(m.cfg.CodingRepos)
+		if m.configRepoInputMode {
+			lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(m.configRepoInputBuf+"_"))
+		} else if m.configRepoCursorIdx == addSlot {
+			lines = append(lines, "      "+ViewActive.Render("▸")+" "+DimText.Render("+ agregar ruta..."))
+		} else {
+			lines = append(lines, "        "+DimText.Render("+ agregar ruta..."))
+		}
+	} else {
+		repoCount := len(m.cfg.CodingRepos)
+		repoVal := "ninguno"
+		if repoCount > 0 {
+			repoVal = fmt.Sprintf("%d repo(s)", repoCount)
+		}
+		lines = append(lines, renderItem(6, "Repos de código", repoVal, ""))
+	}
 
 	for len(lines) < h-1 {
 		lines = append(lines, "")

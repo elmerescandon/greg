@@ -23,11 +23,12 @@ type Tab struct {
 	ContextPct     int
 	ContextTokens  int
 	ContextWindow  int
-	CompactWarned  bool
-	CompactPending bool
-	Model          string
-	Effort         string
+	CompactWarned   bool
+	CompactPending  bool
+	Model           string
+	Effort          string
 	PendingQuestion *PendingQuestion
+	CodeRepo        string
 }
 
 type PendingQuestion struct {

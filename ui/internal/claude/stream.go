@@ -80,7 +80,7 @@ type Process struct {
 	Done  chan struct{}
 }
 
-func StartClaude(vault, model, effort, prompt string, claudeSession string) (*Process, <-chan Event, <-chan string) {
+func StartClaude(vault, model, effort, prompt string, claudeSession string, workdir string) (*Process, <-chan Event, <-chan string) {
 	args := []string{
 		"--model", model,
 		"--effort", effort,
@@ -94,7 +94,11 @@ func StartClaude(vault, model, effort, prompt string, claudeSession string) (*Pr
 	}
 
 	cmd := exec.Command("claude", args...)
-	cmd.Dir = vault
+	if workdir != "" {
+		cmd.Dir = workdir
+	} else {
+		cmd.Dir = vault
+	}
 
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
