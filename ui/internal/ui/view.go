@@ -1340,27 +1340,24 @@ func (m Model) viewConfig() string {
 			}
 		}
 		addSlot := len(m.cfg.CodingRepos)
-		if m.configRepoInputMode {
-			if m.fsNavActive {
-				lines = append(lines, "      "+ViewActive.Render("▸")+" "+ModelStyle.Render(m.fsNavPath))
-				if len(m.fsNavEntries) == 0 {
-					lines = append(lines, "          "+DimText.Render("(directorio vacío)"))
-				}
-				for i, entry := range m.fsNavEntries {
-					name := entry.Name()
-					display := name
-					if entry.IsDir() {
-						display = name + "/"
-					}
-					if m.fsNavCursorIdx == i {
-						lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(display))
-					} else {
-						lines = append(lines, "          "+QuestionLabelDim.Render(display))
-					}
-				}
-			} else {
-				lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(m.configRepoInputBuf+"_"))
+		if m.fsNavActive {
+			lines = append(lines, "      "+ViewActive.Render("▸")+" "+ModelStyle.Render(m.fsNavPath))
+			if len(m.fsNavEntries) == 0 {
+				lines = append(lines, "          "+DimText.Render("(directorio vacío)"))
 			}
+			for i, entry := range m.fsNavEntries {
+				name := entry.Name()
+				if entry.IsDir() {
+					name = name + "/"
+				}
+				if m.fsNavCursorIdx == i {
+					lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(name))
+				} else {
+					lines = append(lines, "          "+QuestionLabelDim.Render(name))
+				}
+			}
+		} else if m.configRepoInputMode {
+			lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(m.configRepoInputBuf+"_"))
 		} else if m.configRepoCursorIdx == addSlot {
 			lines = append(lines, "      "+ViewActive.Render("▸")+" "+DimText.Render("+ agregar ruta..."))
 		} else {
