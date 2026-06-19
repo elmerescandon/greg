@@ -645,14 +645,6 @@ func (m *Model) submitAnswer() tea.Cmd {
 		if selected.Label != "Vault (defecto)" {
 			t.CodeRepo = selected.Label
 		}
-		if home, err := os.UserHomeDir(); err == nil {
-			skillPath := filepath.Join(home, "Documents", "greg", "skills", "coding", "workflow", "SKILL.md")
-			if content, err := os.ReadFile(skillPath); err == nil {
-				cmd := m.send(string(content))
-				t.CurrentAction = "inicializando…"
-				return cmd
-			}
-		}
 		return nil
 	}
 
