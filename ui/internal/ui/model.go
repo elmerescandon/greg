@@ -606,11 +606,11 @@ func (m *Model) send(text string) tea.Cmd {
 	)
 }
 
-func (m *Model) submitAnswer() {
+func (m *Model) submitAnswer() tea.Cmd {
 	t := m.tab()
 	q := t.PendingQuestion
 	if q == nil {
-		return
+		return nil
 	}
 
 	qData := q.Questions[q.CurrentQ]
@@ -634,7 +634,7 @@ func (m *Model) submitAnswer() {
 				},
 			}, t)
 		}
-		return
+		return nil
 	}
 
 	if q.ID == "__repo__" {
@@ -642,7 +642,15 @@ func (m *Model) submitAnswer() {
 		if selected.Label != "Vault (defecto)" {
 			t.CodeRepo = selected.Label
 		}
-		return
+		if home, err := os.UserHomeDir(); err == nil {
+			skillPath := filepath.Join(home, "Documents", "greg", "skills", "coding", "workflow", "SKILL.md")
+			if content, err := os.ReadFile(skillPath); err == nil {
+				cmd := m.send(string(content))
+				t.CurrentAction = "inicializando…"
+				return cmd
+			}
+		}
+		return nil
 	}
 
 	if q.ConfigMode {
@@ -679,7 +687,7 @@ func (m *Model) submitAnswer() {
 			t.Lines = append(t.Lines, DimText.Render(fmt.Sprintf("listo: %s · esfuerzo %s", t.Model, t.Effort)))
 			t.Lines = append(t.Lines, "")
 		}
-		return
+		return nil
 	}
 
 	q.CurrentQ++
@@ -697,6 +705,7 @@ func (m *Model) submitAnswer() {
 		}
 		t.Lines = append(t.Lines, "")
 	}
+	return nil
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1356,7 +1365,8 @@ func (m Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			q.SelectedIdx++
 		}
 	case "enter":
-		m.submitAnswer()
+		cmd := m.submitAnswer()
+		return m, cmd
 	case "escape":
 		t.PendingQuestion = nil
 	}
