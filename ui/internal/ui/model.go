@@ -1071,12 +1071,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					if _, err := os.Stat(worktreePath); err == nil {
 						gregPane, _ := osexec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
 						gregPaneID := strings.TrimSpace(string(gregPane))
-						out, err := osexec.Command("tmux", "split-window", "-v", "-l", "30%", "-P", "-F", "#{pane_id}", "-c", worktreePath).Output()
+						zdotDir := "/tmp/greg-zdot-" + ct.TaskID
+						os.MkdirAll(zdotDir, 0700)
+						home, _ := os.UserHomeDir()
+						initContent := fmt.Sprintf("[ -f %s/.zshrc ] && source %s/.zshrc\nalias t='tmux select-pane -t %s'\n", home, home, gregPaneID)
+						os.WriteFile(zdotDir+"/.zshrc", []byte(initContent), 0600)
+						out, err := osexec.Command("tmux", "split-window", "-v", "-l", "30%", "-P", "-F", "#{pane_id}", "-c", worktreePath, "-e", "ZDOTDIR="+zdotDir).Output()
 						if err == nil {
 							m.codingTermPaneID = strings.TrimSpace(string(out))
 							osexec.Command("tmux", "select-pane", "-t", gregPaneID).Run()
-							alias := fmt.Sprintf("alias t='tmux select-pane -t %s'", gregPaneID)
-							osexec.Command("tmux", "send-keys", "-t", m.codingTermPaneID, alias, "Enter").Run()
 						}
 					}
 				}
