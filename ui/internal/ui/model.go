@@ -144,6 +144,7 @@ type Model struct {
 	multiDetailTmuxLines    []string
 	multiDetailTmuxRendering bool
 	multiDetailGitLines     []string
+	codingTermPaneID        string
 	cfg                   gregConfig
 	configCursorIdx       int
 	configRepoCursorIdx   int
@@ -644,14 +645,6 @@ func (m *Model) submitAnswer() tea.Cmd {
 		if selected.Label != "Vault (defecto)" {
 			t.CodeRepo = selected.Label
 		}
-		if home, err := os.UserHomeDir(); err == nil {
-			skillPath := filepath.Join(home, "Documents", "greg", "skills", "coding", "workflow", "SKILL.md")
-			if content, err := os.ReadFile(skillPath); err == nil {
-				cmd := m.send(string(content))
-				t.CurrentAction = "inicializando…"
-				return cmd
-			}
-		}
 		return nil
 	}
 
@@ -710,6 +703,15 @@ func (m *Model) submitAnswer() tea.Cmd {
 	return nil
 }
 
+func (m *Model) closeCodingTerm() {
+	if m.codingTermPaneID != "" {
+		osexec.Command("tmux", "kill-pane", "-t", m.codingTermPaneID).Run()
+		m.codingTermPaneID = ""
+	}
+	m.multiDetailMode = false
+	m.multiDetailCursorIdx = 0
+}
+
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	t := m.tab()
 	k := msg.String()
@@ -717,22 +719,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k {
 	case "ctrl+q":
 		return m, tea.Quit
-
-	case "ctrl+1":
-		m.viewMode = ViewMetricas
-		return m, nil
-
-	case "ctrl+2", "ctrl+space":
-		m.viewMode = ViewMultiple
-		return m, nil
-
-	case "ctrl+3":
-		m.viewMode = ViewGraficas
-		return m, nil
-
-	case "ctrl+4":
-		m.viewMode = ViewConfig
-		return m, nil
 
 	case "ctrl+c":
 		if t.Proc != nil && t.Proc.Cmd != nil && t.Proc.Cmd.Process != nil {
@@ -790,6 +776,30 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+v":
 		return m, readClipboardCmd()
+
+	case "ctrl+shift+right":
+		m.closeCodingTerm()
+		m.viewMode = ViewMode((int(m.viewMode) + 1) % 4)
+		return m, nil
+
+	case "ctrl+shift+left":
+		m.closeCodingTerm()
+		m.viewMode = ViewMode((int(m.viewMode) + 3) % 4)
+		return m, nil
+
+	case "ctrl+alt+right":
+		m.closeCodingTerm()
+		if len(m.tabs) > 1 {
+			m.tabIdx = (m.tabIdx + 1) % len(m.tabs)
+		}
+		return m, nil
+
+	case "ctrl+alt+left":
+		m.closeCodingTerm()
+		if len(m.tabs) > 1 {
+			m.tabIdx = (m.tabIdx - 1 + len(m.tabs)) % len(m.tabs)
+		}
+		return m, nil
 
 	}
 
@@ -992,15 +1002,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if curTask != nil && curTask.Preset == "coding" {
 				worktreePath := "/tmp/greg-worktree-" + curTask.TaskID
 				switch k {
-				case "t":
-					if _, err := os.Stat(worktreePath); err == nil {
-						shell := os.Getenv("SHELL")
-						if shell == "" {
-							shell = "zsh"
-						}
-						cmd := osexec.Command(shell)
-						cmd.Dir = worktreePath
-						return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return nil })
+				case "ctrl+alt+down":
+					if m.codingTermPaneID != "" {
+						osexec.Command("tmux", "select-pane", "-t", m.codingTermPaneID).Run()
 					}
 				case "g":
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -1014,8 +1018,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			switch k {
 			case "escape", "backspace":
-				m.multiDetailMode = false
-				m.multiDetailCursorIdx = 0
+				m.closeCodingTerm()
 			case "up":
 				if m.multiDetailCursorIdx > 0 {
 					m.multiDetailCursorIdx--
@@ -1060,6 +1063,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.multiDetailMode = true
 			m.multiDetailCursorIdx = 0
+			tasks, _ := task.LoadTasks()
+			if m.multiSelectedIdx < len(tasks) {
+				ct := tasks[m.multiSelectedIdx]
+				if ct.Preset == "coding" {
+					worktreePath := "/tmp/greg-worktree-" + ct.TaskID
+					if _, err := os.Stat(worktreePath); err == nil {
+						gregPane, _ := osexec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
+						gregPaneID := strings.TrimSpace(string(gregPane))
+						out, err := osexec.Command("tmux", "split-window", "-v", "-l", "30%", "-P", "-F", "#{pane_id}", "-c", worktreePath).Output()
+						if err == nil {
+							m.codingTermPaneID = strings.TrimSpace(string(out))
+							osexec.Command("tmux", "select-pane", "-t", gregPaneID).Run()
+						}
+					}
+				}
+			}
 		case "up":
 			if m.multiSelectedIdx > 0 {
 				m.multiSelectedIdx--
