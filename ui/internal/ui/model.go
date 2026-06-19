@@ -1010,7 +1010,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if curTask != nil && curTask.Preset == "coding" {
 				worktreePath := "/tmp/greg-worktree-" + curTask.TaskID
 				switch k {
-				case "t":
+				case "ctrl+alt+down":
 					if m.codingTermPaneID != "" {
 						osexec.Command("tmux", "select-pane", "-t", m.codingTermPaneID).Run()
 					}
