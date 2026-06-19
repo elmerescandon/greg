@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"math"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,491 +13,366 @@ import (
 	"github.com/elmerescandon/greg-ui/internal/session"
 )
 
-// ── heatmap colors (5-level scale, GitHub style) ─────────────────────────────
-// Initialized by InitStyles — nil until then.
-
-var heatSessionColors []string
-var heatCostColors []string
-
-func heatLevel(val, maxVal float64) int {
-	if val <= 0 || maxVal <= 0 {
-		return 0
-	}
-	t := val / maxVal
-	switch {
-	case t > 0.75:
-		return 4
-	case t > 0.5:
-		return 3
-	case t > 0.25:
-		return 2
-	default:
-		return 1
-	}
-}
-
-// ── heatmap with rounded cells ───────────────────────────────────────────────
-
-var dayLabels = []string{"Lun", "   ", "Mié", "   ", "Vie", "   ", "Dom"}
-
-var heatCellStyle = lipgloss.NewStyle().
-	Width(2).
-	Align(lipgloss.Center)
-
-// renderHeatmap renders only the current month: from the Monday of the first
-// week of this month through today. numWeeks is ignored for date range but may
-// still be passed by callers for layout purposes.
-func renderHeatmap(dayData map[string]float64, numWeeks int, useCost bool) []string {
-	colors := heatSessionColors
-	if useCost {
-		colors = heatCostColors
-	}
-
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-
-	// Restrict to current month: start at Monday of the week containing the 1st.
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	startDay := monthStart
-	for startDay.Weekday() != time.Monday {
-		startDay = startDay.AddDate(0, 0, -1)
-	}
-
-	// Calculate how many week columns we need to cover from startDay through today.
-	daysToToday := int(today.Sub(startDay).Hours() / 24)
-	numWeeks = daysToToday/7 + 1
-
-	maxVal := 0.0
-	for _, v := range dayData {
-		if v > maxVal {
-			maxVal = v
-		}
-	}
-
-	grid := make([][]int, 7)
-	for i := range grid {
-		grid[i] = make([]int, numWeeks)
-	}
-
-	d := startDay
-	for week := 0; week < numWeeks; week++ {
-		for dow := 0; dow < 7; dow++ {
-			key := d.Format("2006-01-02")
-			if d.After(today) {
-				grid[dow][week] = -1
-			} else {
-				grid[dow][week] = heatLevel(dayData[key], maxVal)
-			}
-			d = d.AddDate(0, 0, 1)
-		}
-	}
-
-	// Month labels — each dot column is 2 chars wide, align label to column start.
-	const labelW = 5
-	monthSlots := make([]string, numWeeks)
-	prevMonth := ""
-	for week := 0; week < numWeeks; week++ {
-		monDate := startDay.AddDate(0, 0, week*7)
-		m := monDate.Format("Jan")
-		if m != prevMonth {
-			monthSlots[week] = m
-			prevMonth = m
-		}
-	}
-	var monthRow strings.Builder
-	monthRow.WriteString(strings.Repeat(" ", labelW))
-	for week := 0; week < numWeeks; week++ {
-		if monthSlots[week] != "" {
-			label := monthSlots[week]
-			monthRow.WriteString(DimText.Render(label))
-			skip := len(label) / 2
-			for skip > 0 && week+1 < numWeeks {
-				week++
-				skip--
-			}
-		} else {
-			monthRow.WriteString("  ")
-		}
-	}
-
-	var lines []string
-	lines = append(lines, monthRow.String())
-
-	for dow := 0; dow < 7; dow++ {
-		var row strings.Builder
-		label := dayLabels[dow]
-		row.WriteString(DimText.Render(fmt.Sprintf(" %-3s ", label)))
-		for week := 0; week < numWeeks; week++ {
-			level := grid[dow][week]
-			if level < 0 {
-				row.WriteString("  ")
-			} else {
-				c := colors[level]
-				row.WriteString(lipgloss.NewStyle().
-					Foreground(lipgloss.Color(c)).
-					Render("●") + " ")
-			}
-		}
-		lines = append(lines, row.String())
-	}
-
-	return lines
-}
-
-func renderHeatLegend(useCost bool) string {
-	colors := heatSessionColors
-	if useCost {
-		colors = heatCostColors
-	}
-	var sb strings.Builder
-	sb.WriteString(DimText.Render("      menos "))
-	for _, c := range colors {
-		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●") + " ")
-	}
-	sb.WriteString(DimText.Render("más"))
-	return sb.String()
-}
-
-// ── braille line chart ───────────────────────────────────────────────────────
-
-// brailleBit maps (col, row) → braille dot bit.
-// Each braille char is 2 cols × 4 rows.
-var brailleBit = [2][4]byte{
-	{0x01, 0x02, 0x04, 0x40}, // col 0 (left)
-	{0x08, 0x10, 0x20, 0x80}, // col 1 (right)
-}
-
-// catmullRomPoints returns pixW interpolated sample points for a 24-hour series.
-func catmullRomPoints(values [24]float64, pixW int) []float64 {
-	clamp := func(i int) int {
-		if i < 0 {
-			return 0
-		}
-		if i > 23 {
-			return 23
-		}
-		return i
-	}
-	cr := func(p0, p1, p2, p3, t float64) float64 {
-		t2 := t * t
-		t3 := t2 * t
-		return 0.5 * ((2 * p1) +
-			(-p0+p2)*t +
-			(2*p0-5*p1+4*p2-p3)*t2 +
-			(-p0+3*p1-3*p2+p3)*t3)
-	}
-	points := make([]float64, pixW)
-	for px := 0; px < pixW; px++ {
-		frac := float64(px) / float64(pixW) * 23.0
-		i1 := int(frac)
-		t := frac - float64(i1)
-		v := cr(
-			values[clamp(i1-1)],
-			values[clamp(i1)],
-			values[clamp(i1+1)],
-			values[clamp(i1+2)],
-			t,
-		)
-		if v < 0 {
-			v = 0
-		}
-		points[px] = v
-	}
-	return points
-}
-
-// plotCanvas maps interpolated points onto a boolean pixel canvas (pixH rows × pixW cols).
-func plotCanvas(points []float64, maxV float64, pixW, pixH int) [][]bool {
-	canvas := make([][]bool, pixH)
-	for i := range canvas {
-		canvas[i] = make([]bool, pixW)
-	}
-	for px := 0; px < pixW; px++ {
-		normalized := points[px] / maxV
-		py := pixH - 1 - int(math.Round(normalized*float64(pixH-1)))
-		if py < 0 {
-			py = 0
-		}
-		if py >= pixH {
-			py = pixH - 1
-		}
-		canvas[py][px] = true
-	}
-	return canvas
-}
-
-// renderLineChart renders two hourly distributions as dual braille curves with
-// a shared scale. Input tokens are colored cyan, output tokens are colored amber.
-// Where curves overlap, output has visual priority. Returns a legend line followed
-// by height chart rows.
-func renderLineChart(inputVals, outputVals [24]float64, width, height int) []string {
-	// Shared scale across both series so they can be visually compared.
-	maxV := 0.0
-	for _, v := range inputVals {
-		if v > maxV {
-			maxV = v
-		}
-	}
-	for _, v := range outputVals {
-		if v > maxV {
-			maxV = v
-		}
-	}
-	if maxV == 0 {
-		maxV = 1
-	}
-
-	pixW := width * 2
-	pixH := height * 4
-
-	inputCanvas := plotCanvas(catmullRomPoints(inputVals, pixW), maxV, pixW, pixH)
-	outputCanvas := plotCanvas(catmullRomPoints(outputVals, pixW), maxV, pixW, pixH)
-
-	// Legend inline above the chart.
-	legend := "  " +
-		lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Render("● input") +
-		"  " +
-		lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber)).Render("● output")
-
-	rows := make([]string, 0, height+1)
-	rows = append(rows, legend)
-
-	for row := 0; row < height; row++ {
-		var sb strings.Builder
-		for col := 0; col < width; col++ {
-			var inBits, outBits byte
-			for dc := 0; dc < 2; dc++ {
-				for dr := 0; dr < 4; dr++ {
-					py := row*4 + dr
-					px := col*2 + dc
-					if py < pixH && px < pixW {
-						if inputCanvas[py][px] {
-							inBits |= brailleBit[dc][dr]
-						}
-						if outputCanvas[py][px] {
-							outBits |= brailleBit[dc][dr]
-						}
-					}
-				}
-			}
-			// Output has visual priority: render output bits in amber first.
-			if outBits != 0 {
-				sb.WriteString(lipgloss.NewStyle().
-					Foreground(lipgloss.Color(colorAmber)).
-					Render(string(rune(0x2800 + int(outBits)))))
-			} else if inBits != 0 {
-				sb.WriteString(lipgloss.NewStyle().
-					Foreground(lipgloss.Color(colorCyan)).
-					Render(string(rune(0x2800 + int(inBits)))))
-			} else {
-				sb.WriteString(" ")
-			}
-		}
-		rows = append(rows, sb.String())
-	}
-	return rows
-}
-
-func renderHourLabels(width int) string {
-	labels := []struct {
-		hour  int
-		label string
-	}{
-		{0, "0h"}, {4, "4h"}, {8, "8h"}, {12, "12h"}, {16, "16h"}, {20, "20h"},
-	}
-	buf := make([]byte, width)
-	for i := range buf {
-		buf[i] = ' '
-	}
-	for _, l := range labels {
-		pos := l.hour * width / 24
-		if pos+len(l.label) <= width {
-			copy(buf[pos:], l.label)
-		}
-	}
-	return DimText.Render(string(buf))
-}
-
-// ── summary cards ─────────────────────────────────────────────────────────────
-
 // Initialized by InitStyles — zero value until then.
 var cardStyle lipgloss.Style
 var cardLabelStyle lipgloss.Style
 var cardValueStyle lipgloss.Style
 var cardCostStyle lipgloss.Style
 
-func renderSummaryCards(sum metrics.Summary, width int) string {
-	type card struct {
-		label     string
-		sessions  int
-		cost      float64
-		inputTok  int
-		outputTok int
+// ── Bloque 1: 4 summary cards ─────────────────────────────────────────────────
+
+func deltaLabel(current, prev float64) (string, bool) {
+	if prev <= 0 {
+		return "", false
 	}
-	cards := []card{
-		{"Este mes", sum.MonthSessions, sum.MonthCost, sum.MonthInputTokens, sum.MonthOutputTokens},
-		{"Esta semana", sum.WeekSessions, sum.WeekCost, sum.WeekInputTokens, sum.WeekOutputTokens},
-		{"Hoy", sum.TodaySessions, sum.TodayCost, sum.TodayInputTokens, sum.TodayOutputTokens},
+	pct := (current - prev) / prev * 100
+	if pct > 0 {
+		return fmt.Sprintf("▲ %.0f%%", pct), false // sube → rojo
+	}
+	return fmt.Sprintf("▼ %.0f%%", -pct), true // baja → verde
+}
+
+func daysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func renderSummaryCards(sum metrics.Summary, allSess []session.Session, width int) string {
+	now := time.Now()
+
+	// Calcular costos del día anterior y semana anterior para deltas
+	yesterdayStart := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location())
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	weekStart := time.Date(now.Year(), now.Month(), now.Day()-weekday+1, 0, 0, 0, 0, now.Location())
+	prevWeekStart := weekStart.AddDate(0, 0, -7)
+
+	var prevDayCost float64
+	var prevDaySess int
+	var prevWeekCost float64
+	var prevWeekSess int
+	for _, s := range allSess {
+		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
+		if err != nil {
+			continue
+		}
+		if !t.Before(yesterdayStart) && t.Before(todayStart) {
+			prevDayCost += s.CostUSD
+			prevDaySess++
+		}
+		if !t.Before(prevWeekStart) && t.Before(weekStart) {
+			prevWeekCost += s.CostUSD
+			prevWeekSess++
+		}
+	}
+	_ = prevDaySess
+	_ = prevWeekSess
+
+	// Proyección: burn diario × días del mes
+	daysElapsed := float64(now.Day())
+	burnPerDay := sum.MonthCost / daysElapsed
+	totalDays := float64(daysInMonth(now.Year(), now.Month()))
+	projection := burnPerDay * totalDays
+
+	type cardData struct {
+		label    string
+		cost     float64
+		sessions int
+		prevCost float64
+		isProj   bool
+		projEst  float64
+		burn     float64
+	}
+	cards := []cardData{
+		{"Hoy", sum.TodayCost, sum.TodaySessions, prevDayCost, false, 0, 0},
+		{"Semana", sum.WeekCost, sum.WeekSessions, prevWeekCost, false, 0, 0},
+		{"Mes", sum.MonthCost, sum.MonthSessions, sum.PrevCost, false, 0, 0},
+		{"Proyección", 0, 0, 0, true, projection, burnPerDay},
 	}
 
-	cardW := (width - 6) / 3
+	gap := 2
+	cardW := (width - gap*3) / 4
 	if cardW < 16 {
 		cardW = 16
 	}
 
 	var rendered []string
 	for _, c := range cards {
+		var content string
 		label := cardLabelStyle.Render(c.label)
-		sess := cardValueStyle.Render(fmt.Sprintf("%d sess", c.sessions))
-		cost := cardCostStyle.Render(fmt.Sprintf("$%.2f", c.cost))
-		totalTok := c.inputTok + c.outputTok
-		tok := DimText.Render(fmt.Sprintf("%dk tok", totalTok/1000))
-		content := label + "\n" + sess + "  " + cost + "\n" + tok
+
+		if c.isProj {
+			est := cardValueStyle.Render(fmt.Sprintf("~$%.2f", c.projEst))
+			burn := DimText.Render(fmt.Sprintf("$%.2f/día", c.burn))
+			content = label + "\n" + est + "\n" + burn + "\n "
+		} else {
+			costStr := cardCostStyle.Render(fmt.Sprintf("$%.2f", c.cost))
+			sessStr := DimText.Render(fmt.Sprintf("%d sess", c.sessions))
+			var perSess string
+			if c.sessions > 0 {
+				perSess = DimText.Render(fmt.Sprintf("$%.2f/sess", c.cost/float64(c.sessions)))
+			} else {
+				perSess = DimText.Render("—")
+			}
+			d, green := deltaLabel(c.cost, c.prevCost)
+			var deltaStr string
+			if d != "" {
+				if green {
+					deltaStr = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGreen)).Render(d)
+				} else {
+					deltaStr = lipgloss.NewStyle().Foreground(lipgloss.Color(colorRed)).Render(d)
+				}
+			} else {
+				deltaStr = " "
+			}
+			content = label + "\n" + costStr + "  " + sessStr + "\n" + perSess + "\n" + deltaStr
+		}
 		rendered = append(rendered, cardStyle.Width(cardW).Render(content))
 	}
 
+	sep := strings.Repeat(" ", gap)
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		rendered[0], "  ", rendered[1], "  ", rendered[2])
+		rendered[0], sep, rendered[1], sep, rendered[2], sep, rendered[3])
 }
 
-// ── main view ─────────────────────────────────────────────────────────────────
+// ── Bloque 2: panel 50/50 ─────────────────────────────────────────────────────
 
-const lineChartRows = 8
+func renderDayBars(daily []metrics.DaySummary, width int) []string {
+	maxCost := 0.0
+	for _, d := range daily {
+		if d.Cost > maxCost {
+			maxCost = d.Cost
+		}
+	}
+	if maxCost == 0 {
+		maxCost = 1
+	}
 
-func (m Model) viewGraficas() string {
-	allSess := metrics.AllSessions()
-	sum := metrics.GetSummary(allSess)
+	now := time.Now()
+	todayStr := now.Format("2006-01-02")
 
-	h := m.height - 2
-	w := m.width
-	useCost := m.metricsShowCost
+	// " Mon* ████ $0.00" → label(5) + bar + " " + cost(6) = barW = width - 13
+	barMaxW := width - 13
+	if barMaxW < 2 {
+		barMaxW = 2
+	}
+
+	dayAbbr := map[time.Weekday]string{
+		time.Monday:    "Lun",
+		time.Tuesday:   "Mar",
+		time.Wednesday: "Mié",
+		time.Thursday:  "Jue",
+		time.Friday:    "Vie",
+		time.Saturday:  "Sáb",
+		time.Sunday:    "Dom",
+	}
 
 	var lines []string
-
-	// ── Summary cards ──────────────────────────────────────────────────────
-	lines = append(lines, "")
-	lines = append(lines, " "+renderSummaryCards(sum, w-2))
-	lines = append(lines, "")
-
-	// ── Toggle hint — only affects the heatmap ────────────────────────────
-	toggleHint := "[s] sesiones  [c] costo"
-	if useCost {
-		toggleHint = "[s] sesiones  " + ViewActive.Render("[c] costo")
-	} else {
-		toggleHint = ViewActive.Render("[s] sesiones") + "  [c] costo"
-	}
-
-	// ── Activity heatmap ───────────────────────────────────────────────────
-	hdrLeft := SectionHeader.Render("  Actividad")
-	hintPad := w - lipgloss.Width(hdrLeft) - lipgloss.Width(toggleHint) - 2
-	if hintPad < 1 {
-		hintPad = 1
-	}
-	lines = append(lines, hdrLeft+strings.Repeat(" ", hintPad)+DimText.Render(toggleHint))
-	lines = append(lines, "")
-
-	dayData := make(map[string]float64)
-	for _, s := range allSess {
-		if len(s.Started) < 10 {
+	for _, d := range daily {
+		t, err := time.Parse("2006-01-02", d.Date)
+		if err != nil {
 			continue
 		}
-		key := s.Started[:10]
-		if useCost {
-			dayData[key] += s.CostUSD
+		abbr := dayAbbr[t.Weekday()]
+		barW := int(math.Round(float64(barMaxW) * d.Cost / maxCost))
+		if barW < 1 && d.Cost > 0 {
+			barW = 1
+		}
+		bar := strings.Repeat("█", barW)
+		costStr := fmt.Sprintf("$%.2f", d.Cost)
+
+		if d.Date == todayStr {
+			day := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Bold(true).Render(abbr + "*")
+			barRend := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Render(bar)
+			lines = append(lines, fmt.Sprintf(" %-5s%s %s", day, barRend, DimText.Render(costStr)))
 		} else {
-			dayData[key]++
+			day := DimText.Render(fmt.Sprintf("%-4s ", abbr))
+			barRend := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Render(bar)
+			lines = append(lines, fmt.Sprintf(" %s%s %s", day, barRend, DimText.Render(costStr)))
 		}
 	}
-
-	gap := 4
-	halfW := (w - gap) / 2
-
-	// numWeeks is passed to renderHeatmap but ignored for date range (month-only).
-	numWeeks := (halfW - 5) / 2
-	if numWeeks > 52 {
-		numWeeks = 52
-	}
-	if numWeeks < 4 {
-		numWeeks = 4
-	}
-
-	heatLines := renderHeatmap(dayData, numWeeks, useCost)
-	heatLines = append(heatLines, renderHeatLegend(useCost))
-
-	chartW := halfW - 2
-	if chartW < 20 {
-		chartW = 20
-	}
-
-	// Token distributions — always shown regardless of the s/c toggle.
-	inputDist := metrics.HourlyInputTokensDist(allSess)
-	outputDist := metrics.HourlyOutputTokensDist(allSess)
-
-	var chartPanel []string
-	chartPanel = append(chartPanel, SectionHeader.Render(" Tokens por hora"))
-	chartLines := renderLineChart(inputDist, outputDist, chartW, lineChartRows)
-	chartPanel = append(chartPanel, chartLines...)
-	chartPanel = append(chartPanel, renderHourLabels(chartW))
-
-	maxRows := len(heatLines)
-	if len(chartPanel) > maxRows {
-		maxRows = len(chartPanel)
-	}
-	for len(heatLines) < maxRows {
-		heatLines = append(heatLines, "")
-	}
-	for len(chartPanel) < maxRows {
-		chartPanel = append(chartPanel, "")
-	}
-
-	separator := strings.Repeat(" ", gap)
-	for i := 0; i < maxRows; i++ {
-		left := heatLines[i]
-		leftW := lipgloss.Width(left)
-		if leftW < halfW {
-			left += strings.Repeat(" ", halfW-leftW)
-		}
-		lines = append(lines, left+separator+chartPanel[i])
-	}
-	lines = append(lines, "")
-
-	// ── Top sessions table ─────────────────────────────────────────────────
-	tableLines := m.renderSessionsTable(allSess, w)
-	lines = append(lines, tableLines...)
-
-	// ── Fill + footer ──────────────────────────────────────────────────────
-	for len(lines) < h-1 {
-		lines = append(lines, "")
-	}
-	footer := DimText.Render("  s sesiones  c costo  Ctrl+1 chat  Ctrl+2 agente  Ctrl+Q salir")
-	if len(lines) >= h {
-		lines[h-1] = footer
-	} else {
-		lines = append(lines, footer)
-	}
-
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-// ── top sessions table ───────────────────────────────────────────────────────
+type topEntry struct {
+	name string
+	cost float64
+}
+
+func renderTopBreakdown(byModel, byProject map[string]metrics.Summary, width int) []string {
+	totalModel := 0.0
+	for _, s := range byModel {
+		totalModel += s.MonthCost
+	}
+	if totalModel == 0 {
+		totalModel = 1
+	}
+	totalProject := 0.0
+	for _, s := range byProject {
+		totalProject += s.MonthCost
+	}
+	if totalProject == 0 {
+		totalProject = 1
+	}
+
+	top3 := func(m map[string]metrics.Summary) []topEntry {
+		var entries []topEntry
+		for name, s := range m {
+			entries = append(entries, topEntry{name, s.MonthCost})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].cost > entries[j].cost })
+		if len(entries) > 3 {
+			entries = entries[:3]
+		}
+		return entries
+	}
+
+	// " name_______  ████ 62% $5.23" → label(14) + bar + pct(5) + cost(6)
+	barMaxW := width - 26
+	if barMaxW < 2 {
+		barMaxW = 2
+	}
+
+	renderRows := func(entries []topEntry, total float64) []string {
+		var lines []string
+		for _, e := range entries {
+			pct := e.cost / total * 100
+			barW := int(math.Round(float64(barMaxW) * e.cost / total))
+			if barW < 1 && e.cost > 0 {
+				barW = 1
+			}
+			name := e.name
+			if len([]rune(name)) > 14 {
+				name = string([]rune(name)[:13]) + "…"
+			}
+			bar := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Render(strings.Repeat("█", barW))
+			lines = append(lines, fmt.Sprintf(" %-14s%s %2.0f%% %s",
+				name, bar, pct, DimText.Render(fmt.Sprintf("$%.2f", e.cost))))
+		}
+		return lines
+	}
+
+	var lines []string
+	lines = append(lines, SectionHeader.Render(" Modelos"))
+	lines = append(lines, renderRows(top3(byModel), totalModel)...)
+	lines = append(lines, "")
+	lines = append(lines, SectionHeader.Render(" Proyectos"))
+	lines = append(lines, renderRows(top3(byProject), totalProject)...)
+	return lines
+}
+
+func renderWeekPanel(daily []metrics.DaySummary, byModel, byProject map[string]metrics.Summary, width int) []string {
+	half := (width - 2) / 2
+	leftLines := renderDayBars(daily, half)
+	rightLines := renderTopBreakdown(byModel, byProject, width-half-2)
+
+	maxRows := len(leftLines)
+	if len(rightLines) > maxRows {
+		maxRows = len(rightLines)
+	}
+	for len(leftLines) < maxRows {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < maxRows {
+		rightLines = append(rightLines, "")
+	}
+
+	var lines []string
+	sep := strings.Repeat(" ", 2)
+	for i := 0; i < maxRows; i++ {
+		left := leftLines[i]
+		leftW := lipgloss.Width(left)
+		if leftW < half {
+			left += strings.Repeat(" ", half-leftW)
+		}
+		lines = append(lines, left+sep+rightLines[i])
+	}
+	return lines
+}
+
+// ── Bloque 3: historial mensual ───────────────────────────────────────────────
+
+func renderMonthlyHistory(history []metrics.MonthSummary, width int) []string {
+	maxCost := 0.0
+	for _, m := range history {
+		if m.Cost > maxCost {
+			maxCost = m.Cost
+		}
+	}
+	if maxCost == 0 {
+		maxCost = 1
+	}
+
+	// " Jun 2026* ████ $12.45  48 sess" → label(10) + bar + cost(7) + sess(10)
+	barMaxW := width - 28
+	if barMaxW < 2 {
+		barMaxW = 2
+	}
+
+	var lines []string
+	for _, m := range history {
+		barW := int(math.Round(float64(barMaxW) * m.Cost / maxCost))
+		if barW < 1 && m.Cost > 0 {
+			barW = 1
+		}
+		mark := " "
+		var labelRend string
+		var barRend string
+		if m.IsCurrent {
+			mark = "*"
+			labelRend = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Bold(true).Render(fmt.Sprintf("%-9s", m.Label))
+			barRend = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Render(strings.Repeat("█", barW))
+		} else {
+			labelRend = DimText.Render(fmt.Sprintf("%-9s", m.Label))
+			barRend = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Render(strings.Repeat("█", barW))
+		}
+		lines = append(lines, fmt.Sprintf(" %s%s %s  %s  %s",
+			labelRend,
+			mark,
+			barRend,
+			cardCostStyle.Render(fmt.Sprintf("$%.2f", m.Cost)),
+			DimText.Render(fmt.Sprintf("%d sess", m.Sessions)),
+		))
+	}
+	return lines
+}
+
+// ── Bloque 4: top sesiones scrollable ─────────────────────────────────────────
 
 func (m Model) renderSessionsTable(sessions []session.Session, width int) []string {
 	type entry struct {
-		id      string
-		started string
-		cost    float64
-		tokens  int
+		project   string
+		started   string
+		cost      float64
+		inputTok  int
+		outputTok int
 	}
 	var entries []entry
 	for _, s := range sessions {
-		if s.CostUSD > 0 {
-			entries = append(entries, entry{
-				id:      strings.TrimPrefix(s.ID, "greg-"),
-				started: s.Started[:min(len(s.Started), 10)],
-				cost:    s.CostUSD,
-				tokens:  s.OutputTokens,
-			})
+		if s.CostUSD <= 0 {
+			continue
 		}
+		proj := "desconocido"
+		if s.Dir != "" {
+			proj = filepath.Base(s.Dir)
+		}
+		runes := []rune(proj)
+		if len(runes) > 16 {
+			proj = string(runes[:15]) + "…"
+		}
+		started := s.Started
+		if len(started) > 10 {
+			started = started[:10]
+		}
+		entries = append(entries, entry{
+			project:   proj,
+			started:   started,
+			cost:      s.CostUSD,
+			inputTok:  s.InputTokens,
+			outputTok: s.OutputTokens,
+		})
 	}
 	for i := 1; i < len(entries); i++ {
 		for j := i; j > 0 && entries[j].cost > entries[j-1].cost; j-- {
@@ -503,32 +380,103 @@ func (m Model) renderSessionsTable(sessions []session.Session, width int) []stri
 		}
 	}
 
+	total := len(entries)
+	const pageSize = 5
+	offset := m.metricsTableOffset
+	if total > 0 && offset > total-pageSize {
+		offset = total - pageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	var lines []string
-	lines = append(lines, SectionHeader.Render("  Top sesiones por costo"))
+	header := SectionHeader.Render("  Top sesiones por costo")
+	if total > pageSize {
+		indicator := DimText.Render(fmt.Sprintf("(%d/%d)", offset+1, total))
+		pad := width - lipgloss.Width(header) - lipgloss.Width(indicator) - 2
+		if pad < 1 {
+			pad = 1
+		}
+		header = header + strings.Repeat(" ", pad) + indicator
+	}
+	lines = append(lines, header)
 	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", width-2)))
 
-	maxRows := 5
-	if len(entries) < maxRows {
-		maxRows = len(entries)
-	}
-	if maxRows == 0 {
+	if total == 0 {
 		lines = append(lines, "  "+DimText.Render("sin datos de costo aún"))
 		return lines
 	}
 
-	for _, e := range entries[:maxRows] {
+	end := offset + pageSize
+	if end > total {
+		end = total
+	}
+	for _, e := range entries[offset:end] {
 		costStr := cardCostStyle.Render(fmt.Sprintf("$%6.2f", e.cost))
-		tokenStr := DimText.Render(fmt.Sprintf("%5dk tok", e.tokens/1000))
-		idStr := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Render(e.id)
-		dateStr := DimText.Render(e.started)
-		lines = append(lines, fmt.Sprintf("  ● %s  %s  %s  %s", costStr, tokenStr, idStr, dateStr))
+		tokStr := DimText.Render(fmt.Sprintf("%4dk/%3dk", e.inputTok/1000, e.outputTok/1000))
+		projStr := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Render(fmt.Sprintf("%-16s", e.project))
+		lines = append(lines, fmt.Sprintf("  ● %s  %s  %s  %s", costStr, tokStr, projStr, e.started))
+	}
+	if total > pageSize {
+		lines = append(lines, "  "+DimText.Render("j/k desplazar"))
 	}
 	return lines
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// ── main view ─────────────────────────────────────────────────────────────────
+
+func (m Model) viewGraficas() string {
+	allSess := metrics.AllSessions()
+	sum := metrics.GetSummary(allSess)
+
+	h := m.height - 2
+	w := m.width
+
+	var lines []string
+
+	// ── Bloque 1: 4 cards ──────────────────────────────────────────────────
+	lines = append(lines, "")
+	lines = append(lines, " "+renderSummaryCards(sum, allSess, w-2))
+	lines = append(lines, "")
+
+	// ── Bloque 2: panel 7 días + modelo/proyecto ───────────────────────────
+	lines = append(lines, SectionHeader.Render("  Actividad reciente"))
+	lines = append(lines, "")
+	daily := metrics.DailyCostDist(allSess, 7)
+	byModel := metrics.ByModel(allSess)
+	byProject := metrics.ByProject(allSess)
+	for _, l := range renderWeekPanel(daily, byModel, byProject, w-2) {
+		lines = append(lines, " "+l)
 	}
-	return b
+	lines = append(lines, "")
+
+	// ── Bloque 3: historial mensual (omitir si solo hay 1 mes) ─────────────
+	history := metrics.MonthlyHistory(allSess)
+	if len(history) > 1 {
+		lines = append(lines, SectionHeader.Render("  Historial mensual"))
+		lines = append(lines, "")
+		for _, l := range renderMonthlyHistory(history, w-2) {
+			lines = append(lines, " "+l)
+		}
+		lines = append(lines, "")
+	}
+
+	// ── Bloque 4: top sesiones scrollable ──────────────────────────────────
+	for _, l := range m.renderSessionsTable(allSess, w) {
+		lines = append(lines, l)
+	}
+
+	// ── Fill + footer ──────────────────────────────────────────────────────
+	for len(lines) < h-1 {
+		lines = append(lines, "")
+	}
+	footer := DimText.Render("  j/k desplazar  Ctrl+1 chat  Ctrl+2 agente  Ctrl+3 métricas  Ctrl+Q salir")
+	if len(lines) >= h {
+		lines[h-1] = footer
+	} else {
+		lines = append(lines, footer)
+	}
+
+	return strings.Join(lines, "\n")
 }

@@ -130,7 +130,7 @@ type Model struct {
 	savedInput     string
 	vault          string
 	viewMode              ViewMode
-	metricsShowCost       bool
+	metricsTableOffset    int
 	sidebarFocused        bool
 	sidebarIdx            int
 	multiSelectedIdx        int
@@ -882,11 +882,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == ViewGraficas {
 		switch k {
-		case "s":
-			m.metricsShowCost = false
+		case "j":
+			m.metricsTableOffset++
 			return m, nil
-		case "c":
-			m.metricsShowCost = true
+		case "k":
+			if m.metricsTableOffset > 0 {
+				m.metricsTableOffset--
+			}
 			return m, nil
 		case "1":
 			m.viewMode = ViewMetricas
