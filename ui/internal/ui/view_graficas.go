@@ -36,16 +36,15 @@ func heatLevel(val, maxVal float64) int {
 
 // ── heatmap with rounded cells ───────────────────────────────────────────────
 
-// Each cell is rendered as a colored "▪" (small filled square) which together
-// with the spacing gives a GitHub-like rounded dot appearance.
-// We use lipgloss per-cell styling with the rounded box border for each cell.
-
 var dayLabels = []string{"Lun", "   ", "Mié", "   ", "Vie", "   ", "Dom"}
 
 var heatCellStyle = lipgloss.NewStyle().
 	Width(2).
 	Align(lipgloss.Center)
 
+// renderHeatmap renders only the current month: from the Monday of the first
+// week of this month through today. numWeeks is ignored for date range but may
+// still be passed by callers for layout purposes.
 func renderHeatmap(dayData map[string]float64, numWeeks int, useCost bool) []string {
 	colors := heatSessionColors
 	if useCost {
@@ -55,14 +54,16 @@ func renderHeatmap(dayData map[string]float64, numWeeks int, useCost bool) []str
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
-	endDay := today
-	for endDay.Weekday() != time.Sunday {
-		endDay = endDay.AddDate(0, 0, 1)
-	}
-	startDay := endDay.AddDate(0, 0, -(numWeeks*7 - 1))
+	// Restrict to current month: start at Monday of the week containing the 1st.
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startDay := monthStart
 	for startDay.Weekday() != time.Monday {
 		startDay = startDay.AddDate(0, 0, -1)
 	}
+
+	// Calculate how many week columns we need to cover from startDay through today.
+	daysToToday := int(today.Sub(startDay).Hours() / 24)
+	numWeeks = daysToToday/7 + 1
 
 	maxVal := 0.0
 	for _, v := range dayData {
@@ -89,7 +90,7 @@ func renderHeatmap(dayData map[string]float64, numWeeks int, useCost bool) []str
 		}
 	}
 
-	// Month labels — each dot column is 2 chars wide ("● "), align label to column start
+	// Month labels — each dot column is 2 chars wide, align label to column start.
 	const labelW = 5
 	monthSlots := make([]string, numWeeks)
 	prevMonth := ""
@@ -164,26 +165,9 @@ var brailleBit = [2][4]byte{
 	{0x08, 0x10, 0x20, 0x80}, // col 1 (right)
 }
 
-func renderLineChart(values [24]float64, width, height int, useCost bool) []string {
-	maxV := 0.0
-	for _, v := range values {
-		if v > maxV {
-			maxV = v
-		}
-	}
-	if maxV == 0 {
-		maxV = 1
-	}
-
-	pixW := width * 2
-	pixH := height * 4
-	canvas := make([][]bool, pixH)
-	for i := range canvas {
-		canvas[i] = make([]bool, pixW)
-	}
-
-	// Catmull-Rom spline interpolation for smooth curve
-	clampHour := func(i int) int {
+// catmullRomPoints returns pixW interpolated sample points for a 24-hour series.
+func catmullRomPoints(values [24]float64, pixW int) []float64 {
+	clamp := func(i int) int {
 		if i < 0 {
 			return 0
 		}
@@ -192,7 +176,7 @@ func renderLineChart(values [24]float64, width, height int, useCost bool) []stri
 		}
 		return i
 	}
-	catmullRom := func(p0, p1, p2, p3, t float64) float64 {
+	cr := func(p0, p1, p2, p3, t float64) float64 {
 		t2 := t * t
 		t3 := t2 * t
 		return 0.5 * ((2 * p1) +
@@ -205,18 +189,27 @@ func renderLineChart(values [24]float64, width, height int, useCost bool) []stri
 		frac := float64(px) / float64(pixW) * 23.0
 		i1 := int(frac)
 		t := frac - float64(i1)
-		p0 := values[clampHour(i1-1)]
-		p1 := values[clampHour(i1)]
-		p2 := values[clampHour(i1+1)]
-		p3 := values[clampHour(i1+2)]
-		v := catmullRom(p0, p1, p2, p3, t)
+		v := cr(
+			values[clamp(i1-1)],
+			values[clamp(i1)],
+			values[clamp(i1+1)],
+			values[clamp(i1+2)],
+			t,
+		)
 		if v < 0 {
 			v = 0
 		}
 		points[px] = v
 	}
+	return points
+}
 
-	// Plot the line: for each x, compute y and draw a dot
+// plotCanvas maps interpolated points onto a boolean pixel canvas (pixH rows × pixW cols).
+func plotCanvas(points []float64, maxV float64, pixW, pixH int) [][]bool {
+	canvas := make([][]bool, pixH)
+	for i := range canvas {
+		canvas[i] = make([]bool, pixW)
+	}
 	for px := 0; px < pixW; px++ {
 		normalized := points[px] / maxV
 		py := pixH - 1 - int(math.Round(normalized*float64(pixH-1)))
@@ -228,36 +221,77 @@ func renderLineChart(values [24]float64, width, height int, useCost bool) []stri
 		}
 		canvas[py][px] = true
 	}
+	return canvas
+}
 
-	lineColor := colorCyan
-	if useCost {
-		lineColor = colorAmber
+// renderLineChart renders two hourly distributions as dual braille curves with
+// a shared scale. Input tokens are colored cyan, output tokens are colored amber.
+// Where curves overlap, output has visual priority. Returns a legend line followed
+// by height chart rows.
+func renderLineChart(inputVals, outputVals [24]float64, width, height int) []string {
+	// Shared scale across both series so they can be visually compared.
+	maxV := 0.0
+	for _, v := range inputVals {
+		if v > maxV {
+			maxV = v
+		}
+	}
+	for _, v := range outputVals {
+		if v > maxV {
+			maxV = v
+		}
+	}
+	if maxV == 0 {
+		maxV = 1
 	}
 
-	rows := make([]string, height)
+	pixW := width * 2
+	pixH := height * 4
+
+	inputCanvas := plotCanvas(catmullRomPoints(inputVals, pixW), maxV, pixW, pixH)
+	outputCanvas := plotCanvas(catmullRomPoints(outputVals, pixW), maxV, pixW, pixH)
+
+	// Legend inline above the chart.
+	legend := "  " +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Render("● input") +
+		"  " +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber)).Render("● output")
+
+	rows := make([]string, 0, height+1)
+	rows = append(rows, legend)
+
 	for row := 0; row < height; row++ {
 		var sb strings.Builder
 		for col := 0; col < width; col++ {
-			var bits byte
+			var inBits, outBits byte
 			for dc := 0; dc < 2; dc++ {
 				for dr := 0; dr < 4; dr++ {
 					py := row*4 + dr
 					px := col*2 + dc
-					if py < pixH && px < pixW && canvas[py][px] {
-						bits |= brailleBit[dc][dr]
+					if py < pixH && px < pixW {
+						if inputCanvas[py][px] {
+							inBits |= brailleBit[dc][dr]
+						}
+						if outputCanvas[py][px] {
+							outBits |= brailleBit[dc][dr]
+						}
 					}
 				}
 			}
-			ch := rune(0x2800 + int(bits))
-			if bits == 0 {
-				sb.WriteString(" ")
-			} else {
+			// Output has visual priority: render output bits in amber first.
+			if outBits != 0 {
 				sb.WriteString(lipgloss.NewStyle().
-					Foreground(lipgloss.Color(lineColor)).
-					Render(string(ch)))
+					Foreground(lipgloss.Color(colorAmber)).
+					Render(string(rune(0x2800 + int(outBits)))))
+			} else if inBits != 0 {
+				sb.WriteString(lipgloss.NewStyle().
+					Foreground(lipgloss.Color(colorCyan)).
+					Render(string(rune(0x2800 + int(inBits)))))
+			} else {
+				sb.WriteString(" ")
 			}
 		}
-		rows[row] = sb.String()
+		rows = append(rows, sb.String())
 	}
 	return rows
 }
@@ -292,14 +326,16 @@ var cardCostStyle lipgloss.Style
 
 func renderSummaryCards(sum metrics.Summary, width int) string {
 	type card struct {
-		label    string
-		sessions int
-		cost     float64
+		label     string
+		sessions  int
+		cost      float64
+		inputTok  int
+		outputTok int
 	}
 	cards := []card{
-		{"Este mes", sum.MonthSessions, sum.MonthCost},
-		{"Esta semana", sum.WeekSessions, sum.WeekCost},
-		{"Hoy", sum.TodaySessions, sum.TodayCost},
+		{"Este mes", sum.MonthSessions, sum.MonthCost, sum.MonthInputTokens, sum.MonthOutputTokens},
+		{"Esta semana", sum.WeekSessions, sum.WeekCost, sum.WeekInputTokens, sum.WeekOutputTokens},
+		{"Hoy", sum.TodaySessions, sum.TodayCost, sum.TodayInputTokens, sum.TodayOutputTokens},
 	}
 
 	cardW := (width - 6) / 3
@@ -312,7 +348,9 @@ func renderSummaryCards(sum metrics.Summary, width int) string {
 		label := cardLabelStyle.Render(c.label)
 		sess := cardValueStyle.Render(fmt.Sprintf("%d sess", c.sessions))
 		cost := cardCostStyle.Render(fmt.Sprintf("$%.2f", c.cost))
-		content := label + "\n" + sess + "  " + cost
+		totalTok := c.inputTok + c.outputTok
+		tok := DimText.Render(fmt.Sprintf("%dk tok", totalTok/1000))
+		content := label + "\n" + sess + "  " + cost + "\n" + tok
 		rendered = append(rendered, cardStyle.Width(cardW).Render(content))
 	}
 
@@ -339,7 +377,7 @@ func (m Model) viewGraficas() string {
 	lines = append(lines, " "+renderSummaryCards(sum, w-2))
 	lines = append(lines, "")
 
-	// ── Toggle hint ────────────────────────────────────────────────────────
+	// ── Toggle hint — only affects the heatmap ────────────────────────────
 	toggleHint := "[s] sesiones  [c] costo"
 	if useCost {
 		toggleHint = "[s] sesiones  " + ViewActive.Render("[c] costo")
@@ -369,19 +407,10 @@ func (m Model) viewGraficas() string {
 		}
 	}
 
-	var hourDist [24]float64
-	if useCost {
-		hourDist = metrics.HourlyCostDist(allSess)
-	} else {
-		dist := metrics.HourlyDist(allSess)
-		for i, v := range dist {
-			hourDist[i] = float64(v)
-		}
-	}
-
 	gap := 4
 	halfW := (w - gap) / 2
 
+	// numWeeks is passed to renderHeatmap but ignored for date range (month-only).
 	numWeeks := (halfW - 5) / 2
 	if numWeeks > 52 {
 		numWeeks = 52
@@ -397,10 +426,14 @@ func (m Model) viewGraficas() string {
 	if chartW < 20 {
 		chartW = 20
 	}
+
+	// Token distributions — always shown regardless of the s/c toggle.
+	inputDist := metrics.HourlyInputTokensDist(allSess)
+	outputDist := metrics.HourlyOutputTokensDist(allSess)
+
 	var chartPanel []string
-	chartPanel = append(chartPanel, SectionHeader.Render(" Horas de actividad"))
-	chartPanel = append(chartPanel, "")
-	chartLines := renderLineChart(hourDist, chartW, lineChartRows, useCost)
+	chartPanel = append(chartPanel, SectionHeader.Render(" Tokens por hora"))
+	chartLines := renderLineChart(inputDist, outputDist, chartW, lineChartRows)
 	chartPanel = append(chartPanel, chartLines...)
 	chartPanel = append(chartPanel, renderHourLabels(chartW))
 
