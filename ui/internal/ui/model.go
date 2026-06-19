@@ -586,7 +586,7 @@ func (m *Model) send(text string) tea.Cmd {
 	claudeSess := t.ClaudeSession
 	tabID := t.GregSessionID
 
-	proc, events, errors := claude.StartClaude(vault, model, effort, text, claudeSess)
+	proc, events, errors := claude.StartClaude(vault, model, effort, text, claudeSess, t.CodeRepo)
 	t.Proc = proc
 	t.Events = events
 	t.Errors = errors
