@@ -499,12 +499,14 @@ func (m *Model) handleEvent(tabIdx int, ev claude.Event) {
 							CtxMed.Render(fmt.Sprintf("⚠ contexto al %d%% — Ctrl+K para compactar", t.ContextPct)))
 					}
 
+					totalInput := 0
 					totalOutput := 0
 					for _, m := range ev.ModelUsage {
+						totalInput += m.InputTokens
 						totalOutput += m.OutputTokens
 					}
 					if t.GregSessionID != "" {
-						session.AccumulateUsage(t.GregSessionID, totalOutput, ev.TotalCostUSD)
+						session.AccumulateUsage(t.GregSessionID, totalInput, totalOutput, ev.TotalCostUSD)
 					}
 					break
 				}

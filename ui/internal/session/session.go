@@ -17,6 +17,7 @@ type Session struct {
 	Status         string  `json:"status"`
 	ClaudeSession  string  `json:"claude_session_id,omitempty"`
 	Model          string  `json:"model,omitempty"`
+	InputTokens    int     `json:"input_tokens,omitempty"`
 	OutputTokens   int     `json:"output_tokens,omitempty"`
 	CostUSD        float64 `json:"cost_usd,omitempty"`
 }
@@ -155,13 +156,14 @@ func UpdateClaudeSession(gregID, claudeSessionID string) {
 	SaveSessions(sessions)
 }
 
-func AccumulateUsage(gregID string, outputTokens int, cost float64) {
+func AccumulateUsage(gregID string, inputTokens int, outputTokens int, cost float64) {
 	sessions, err := LoadSessions()
 	if err != nil {
 		return
 	}
 	for i := range sessions {
 		if sessions[i].ID == gregID {
+			sessions[i].InputTokens += inputTokens
 			sessions[i].OutputTokens += outputTokens
 			sessions[i].CostUSD += cost
 			break
