@@ -10,6 +10,7 @@ import (
 
 	"charm.land/glamour/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/elmerescandon/greg-ui/internal/claude"
 	"github.com/elmerescandon/greg-ui/internal/session"
 	"github.com/elmerescandon/greg-ui/internal/task"
 	tea "charm.land/bubbletea/v2"
@@ -223,7 +224,7 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 		selector = "❯ "
 	}
 
-	status := t.CoordinatorStatus
+	status := strings.ReplaceAll(t.CoordinatorStatus, "\n", " ")
 	if len(status) > statusW {
 		status = status[:statusW-1] + "…"
 	}
@@ -240,7 +241,7 @@ func (m Model) renderTaskRow(t task.Task, selected bool, statusW, idW, dateW, go
 	if t.Preset == "coding" {
 		tagLen = 2
 	}
-	goal := t.Goal
+	goal := strings.ReplaceAll(t.Goal, "\n", " ")
 	if len(goal) > goalW-tagLen {
 		goal = goal[:goalW-tagLen-1] + "…"
 	}
@@ -883,6 +884,9 @@ func (m Model) viewMetricas() string {
 	if question != "" {
 		chatSections = append(chatSections, question)
 	}
+	if preview := m.viewSidebarPreview(); preview != "" {
+		chatSections = append(chatSections, preview)
+	}
 	chatSections = append(chatSections, input, footer)
 	chatLines := strings.Split(lipgloss.JoinVertical(lipgloss.Left, chatSections...), "\n")
 
@@ -913,9 +917,17 @@ func (m Model) buildSidebarLines(sessions []session.Session, w int, h int) []str
 		lines = append(lines, "  "+DimText.Render("sin sesiones"))
 	}
 	for i, s := range sessions {
-		id := strings.TrimPrefix(s.ID, "greg-")
-		if len(id) > 8 {
-			id = id[:8]
+		label := m.sidebarSummaryCache[s.ID]
+		if label == "" {
+			id := strings.TrimPrefix(s.ID, "greg-")
+			if len(id) > 8 {
+				id = id[:8]
+			}
+			label = id
+		}
+		lr := []rune(label)
+		if len(lr) > 12 {
+			label = string(lr[:11]) + "…"
 		}
 		var bullet string
 		if s.Status == "active" {
@@ -928,7 +940,7 @@ func (m Model) buildSidebarLines(sessions []session.Session, w int, h int) []str
 			ts = s.Ended
 		}
 		ago := timeAgo(ts)
-		content := fmt.Sprintf("%s  %-8s  %s", bullet, id, ago)
+		content := fmt.Sprintf("%s  %s  %s", bullet, label, ago)
 
 		prefix := " "
 		if i == m.sidebarIdx {
@@ -951,6 +963,43 @@ func (m Model) buildSidebarLines(sessions []session.Session, w int, h int) []str
 		lines = append(lines, "")
 	}
 	return lines[:h]
+}
+
+func (m Model) viewSidebarPreview() string {
+	if !m.sidebarPreviewMode {
+		return ""
+	}
+	sessions := computeStandaloneSessions()
+	if m.sidebarIdx >= len(sessions) {
+		return ""
+	}
+	s := sessions[m.sidebarIdx]
+
+	entries := claude.LoadHistory(m.vault, s.ClaudeSession, 10)
+	previewLines := renderHistory(entries)
+
+	maxLines := 10
+	if len(previewLines) > maxLines {
+		previewLines = previewLines[len(previewLines)-maxLines:]
+	}
+
+	var lines []string
+	if len(previewLines) == 0 {
+		lines = append(lines, "  "+DimText.Render("sin historial"))
+	} else {
+		lines = append(lines, previewLines...)
+	}
+	lines = append(lines, "")
+	lines = append(lines, "  "+DimText.Render("Enter abrir  Esc cerrar"))
+
+	sessionLabel := strings.TrimPrefix(s.ID, "greg-")
+	if len(sessionLabel) > 8 {
+		sessionLabel = sessionLabel[:8]
+	}
+	content := strings.Join(lines, "\n")
+	return QuestionBorder.Width(m.width - 4).
+		BorderTop(true).BorderBottom(true).BorderLeft(true).BorderRight(true).
+		Render(lipgloss.NewStyle().Foreground(lipgloss.Color("#3377ff")).Render(" preview: "+sessionLabel+" ") + "\n" + content)
 }
 
 func timeAgo(started string) string {
@@ -1292,7 +1341,26 @@ func (m Model) viewConfig() string {
 		}
 		addSlot := len(m.cfg.CodingRepos)
 		if m.configRepoInputMode {
-			lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(m.configRepoInputBuf+"_"))
+			if m.fsNavActive {
+				lines = append(lines, "      "+ViewActive.Render("▸")+" "+ModelStyle.Render(m.fsNavPath))
+				if len(m.fsNavEntries) == 0 {
+					lines = append(lines, "          "+DimText.Render("(directorio vacío)"))
+				}
+				for i, entry := range m.fsNavEntries {
+					name := entry.Name()
+					display := name
+					if entry.IsDir() {
+						display = name + "/"
+					}
+					if m.fsNavCursorIdx == i {
+						lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(display))
+					} else {
+						lines = append(lines, "          "+QuestionLabelDim.Render(display))
+					}
+				}
+			} else {
+				lines = append(lines, "      "+ViewActive.Render("▸")+" "+QuestionLabel.Render(m.configRepoInputBuf+"_"))
+			}
 		} else if m.configRepoCursorIdx == addSlot {
 			lines = append(lines, "      "+ViewActive.Render("▸")+" "+DimText.Render("+ agregar ruta..."))
 		} else {
