@@ -150,6 +150,14 @@ type Model struct {
 	configRepoInputMode   bool
 	configRepoInputBuf    string
 	tickCount             int
+	// fs navigator (tab Config)
+	fsNavActive    bool
+	fsNavPath      string
+	fsNavEntries   []os.DirEntry
+	fsNavCursorIdx int
+	// sidebar preview (tab Metricas)
+	sidebarPreviewMode  bool
+	sidebarSummaryCache map[string]string
 }
 
 // Messages
@@ -215,11 +223,12 @@ func NewModel(vault string) Model {
 	}
 
 	m := Model{
-		tabs:       []*Tab{tab},
-		tabIdx:     0,
-		vault:      vault,
-		historyIdx: -1,
-		cfg:        cfg,
+		tabs:                []*Tab{tab},
+		tabIdx:              0,
+		vault:               vault,
+		historyIdx:          -1,
+		cfg:                 cfg,
+		sidebarSummaryCache: make(map[string]string),
 	}
 	return m
 }
@@ -262,6 +271,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tickCount++
 		if m.tickCount%62 == 0 {
 			m.checkIdleTimeout()
+		}
+		if m.tickCount%50 == 0 {
+			sessions := computeStandaloneSessions()
+			if m.sidebarSummaryCache == nil {
+				m.sidebarSummaryCache = make(map[string]string)
+			}
+			for _, s := range sessions {
+				if _, ok := m.sidebarSummaryCache[s.ID]; !ok && s.ClaudeSession != "" {
+					m.sidebarSummaryCache[s.ID] = claude.SessionSummary(m.vault, s.ClaudeSession)
+				}
+			}
 		}
 		return m, tickCmd()
 
@@ -798,6 +818,45 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.viewMode == ViewConfig {
+		// FS navigator mode: browsing directories to select a repo path
+		if m.fsNavActive {
+			switch k {
+			case "up":
+				if m.fsNavCursorIdx > 0 {
+					m.fsNavCursorIdx--
+				}
+			case "down":
+				if m.fsNavCursorIdx < len(m.fsNavEntries)-1 {
+					m.fsNavCursorIdx++
+				}
+			case "enter":
+				if m.fsNavCursorIdx < len(m.fsNavEntries) {
+					newPath := filepath.Join(m.fsNavPath, m.fsNavEntries[m.fsNavCursorIdx].Name())
+					entries, _ := os.ReadDir(newPath)
+					m.fsNavPath = newPath
+					m.fsNavEntries = filterDirs(entries)
+					m.fsNavCursorIdx = 0
+				}
+			case "backspace":
+				parent := filepath.Dir(m.fsNavPath)
+				if parent != m.fsNavPath {
+					entries, _ := os.ReadDir(parent)
+					m.fsNavPath = parent
+					m.fsNavEntries = filterDirs(entries)
+					m.fsNavCursorIdx = 0
+				}
+			case "s":
+				m.cfg.CodingRepos = append(m.cfg.CodingRepos, m.fsNavPath)
+				saveGregConfig(m.cfg)
+				m.fsNavActive = false
+				m.fsNavEntries = nil
+			case "escape":
+				m.fsNavActive = false
+				m.fsNavEntries = nil
+			}
+			return m, nil
+		}
+
 		// Text input mode: capturing path for new coding repo
 		if m.configRepoInputMode {
 			switch k {
@@ -839,8 +898,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			case "enter", " ", "right":
 				if m.configRepoCursorIdx == len(m.cfg.CodingRepos) {
-					m.configRepoInputMode = true
-					m.configRepoInputBuf = ""
+					home, _ := os.UserHomeDir()
+					m.fsNavActive = true
+					m.fsNavPath = home
+					m.fsNavCursorIdx = 0
+					entries, _ := os.ReadDir(home)
+					m.fsNavEntries = filterDirs(entries)
 				}
 			case "backspace", "delete":
 				repos := m.cfg.CodingRepos
@@ -901,6 +964,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.viewMode == ViewMetricas {
+		if m.sidebarPreviewMode {
+			switch k {
+			case "escape":
+				m.sidebarPreviewMode = false
+				return m, nil
+			case "enter":
+				return m.openSidebarSession()
+			}
+			return m, nil
+		}
+
 		switch k {
 		case "ctrl+shift+up":
 			m.sidebarFocused = true
@@ -917,6 +991,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+shift+enter":
 			return m.openSidebarSession()
+		case "ctrl+enter":
+			if m.sidebarFocused {
+				m.sidebarPreviewMode = true
+			}
+			return m, nil
 		case "enter":
 			if m.sidebarFocused {
 				return m.openSidebarSession()
@@ -1523,6 +1602,17 @@ func (m *Model) resolveDetailFile(t *task.Task) string {
 		return t.Workspace + "/messages/" + msgs[idx]
 	}
 	return ""
+}
+
+// filterDirs returns only directory entries from a ReadDir result.
+func filterDirs(entries []os.DirEntry) []os.DirEntry {
+	var dirs []os.DirEntry
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e)
+		}
+	}
+	return dirs
 }
 
 // tabAtX returns the tab index at the given X column in the tab bar, or -1.

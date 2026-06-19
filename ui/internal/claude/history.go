@@ -28,6 +28,62 @@ type HistoryBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 }
 
+func SessionSummary(vault, claudeSessionID string) string {
+	if claudeSessionID == "" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	projectKey := strings.ReplaceAll(vault, "/", "-")
+	path := filepath.Join(home, ".claude", "projects", projectKey, claudeSessionID+".jsonl")
+
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		var e HistoryEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if e.Type != "user" || e.Message == nil {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(e.Message.Content, &text); err == nil {
+			text = strings.TrimSpace(text)
+			if text != "" {
+				r := []rune(text)
+				if len(r) > 60 {
+					return string(r[:60])
+				}
+				return text
+			}
+		}
+		var blocks []HistoryBlock
+		if err := json.Unmarshal(e.Message.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				if b.Type == "text" && b.Text != "" {
+					text = strings.TrimSpace(b.Text)
+					r := []rune(text)
+					if len(r) > 60 {
+						return string(r[:60])
+					}
+					return text
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func LoadHistory(vault, claudeSessionID string, limit int) []HistoryEntry {
 	if claudeSessionID == "" {
 		return nil
