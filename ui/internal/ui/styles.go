@@ -180,8 +180,6 @@ func InitStyles(dark bool) {
 		colorTabActiveBg = "#131f30"
 		colorFooterBg    = "#090e17"
 
-		heatSessionColors = []string{"#161b22", "#0e4429", "#006d32", "#26a641", "#3ddc84"}
-		heatCostColors    = []string{"#161b22", "#2a1500", "#5c3600", "#b36b00", "#f5a32a"}
 	} else {
 		// Gruvbox Light palette
 		colorBg          = "#f9f5e7"
@@ -202,8 +200,6 @@ func InitStyles(dark bool) {
 		colorTabActiveBg = "#ede8d0"
 		colorFooterBg    = "#f2ecd8"
 
-		heatSessionColors = []string{"#ede8d0", "#b8d8b0", "#7db87d", "#3a9a3a", "#79740e"}
-		heatCostColors    = []string{"#ede8d0", "#f5deba", "#e8c070", "#d4a020", "#b57614"}
 	}
 
 	StatusBarStyle = lipgloss.NewStyle().Padding(0, 1)
