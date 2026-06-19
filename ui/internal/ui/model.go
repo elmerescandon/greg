@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -142,6 +143,7 @@ type Model struct {
 	multiDetailRendering    bool
 	multiDetailTmuxLines    []string
 	multiDetailTmuxRendering bool
+	multiDetailGitLines     []string
 	cfg                   gregConfig
 	configCursorIdx       int
 	configRepoCursorIdx   int
@@ -984,6 +986,29 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.multiSelectedIdx < len(tasks) {
 				t := tasks[m.multiSelectedIdx]
 				curTask = &t
+			}
+			if curTask != nil && curTask.Preset == "coding" {
+				worktreePath := "/tmp/greg-worktree-" + curTask.TaskID
+				switch k {
+				case "t":
+					if _, err := os.Stat(worktreePath); err == nil {
+						shell := os.Getenv("SHELL")
+						if shell == "" {
+							shell = "zsh"
+						}
+						cmd := osexec.Command(shell)
+						cmd.Dir = worktreePath
+						return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return nil })
+					}
+				case "g":
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					logOut, _ := osexec.CommandContext(ctx, "git", "-C", worktreePath, "log", "--oneline", "-10").Output()
+					statusOut, _ := osexec.CommandContext(ctx, "git", "-C", worktreePath, "status", "--short").Output()
+					combined := strings.TrimRight(string(logOut)+string(statusOut), "\n")
+					m.multiDetailGitLines = strings.Split(combined, "\n")
+					return m, nil
+				}
 			}
 			switch k {
 			case "escape", "backspace":

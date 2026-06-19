@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -153,6 +154,9 @@ func (m Model) viewMultiple() string {
 		return m.viewFileContent()
 	}
 	if m.multiDetailMode && sel >= 0 && sel < n {
+		if tasks[sel].Preset == "coding" {
+			return m.viewCodingDetail(tasks[sel])
+		}
 		return m.viewNetworkDetail(tasks[sel])
 	}
 
@@ -653,6 +657,182 @@ func (m Model) viewNetworkDetail(t task.Task) string {
 		all = all[:h]
 	}
 	return strings.Join(all, "\n")
+}
+
+// viewCodingDetail — vista de dos columnas para tareas con Preset=="coding".
+// Columna izquierda (~60%): COMMAND CENTER animado.
+// Columna derecha: panel git (log + status) y panel terminal (path + tecla t).
+func (m Model) viewCodingDetail(t task.Task) string {
+	h := m.height - 2
+	headerH := 2
+	footerH := 1
+	contentH := h - headerH - footerH
+	if contentH < 3 {
+		contentH = 3
+	}
+
+	leftW := m.width * 6 / 10
+	rightW := m.width - leftW - 1
+
+	// Encabezado idéntico a viewNetworkDetail
+	statusLabel := t.CoordinatorStatus
+	if statusLabel == "" {
+		statusLabel = "—"
+	}
+	agents := task.AllAgents(t)
+	nWorking, nDone := 0, 0
+	for _, a := range agents {
+		switch task.AgentStatus(t.Workspace, a.ID) {
+		case "working":
+			nWorking++
+		case "done", "completed":
+			nDone++
+		}
+	}
+	var agentSummary string
+	switch {
+	case nWorking > 0:
+		agentSummary = "  " + StatusYellow.Render(spinFrames[m.spinIdx]+" "+fmt.Sprintf("%d activos", nWorking))
+		if len(agents) > nWorking {
+			agentSummary += DimText.Render(fmt.Sprintf(" · %d total", len(agents)))
+		}
+	case len(agents) > 0 && nDone == len(agents):
+		agentSummary = "  " + StatusGreen.Render(fmt.Sprintf("✔ %d completados", nDone))
+	case len(agents) > 0:
+		agentSummary = "  " + DimText.Render(fmt.Sprintf("%d agentes", len(agents)))
+	}
+	breadcrumb := fmt.Sprintf("← Agente / %s", t.TaskID)
+	header1 := " " + ViewActive.Render(breadcrumb) + "  " + DimText.Render("["+statusLabel+"]") + agentSummary
+	header2 := " " + SepDim.Render(strings.Repeat("─", m.width-2))
+
+	// Columna izquierda: renderNetworkGraph al ancho leftW-2
+	leftLines := m.renderNetworkGraph(t, leftW-2, contentH, m.multiDetailCursorIdx)
+
+	// Worktree path convencional
+	worktreePath := "/tmp/greg-worktree-" + t.TaskID
+
+	// Columna derecha
+	rightLines := m.buildCodingRightPanel(worktreePath, rightW, contentH)
+
+	// Separador y merge de columnas
+	sep := SepDim.Render("│")
+	var all []string
+	all = append(all, header1, header2)
+	for i := 0; i < contentH; i++ {
+		var ll, rl string
+		if i < len(leftLines) {
+			ll = leftLines[i]
+		}
+		if i < len(rightLines) {
+			rl = rightLines[i]
+		}
+		all = append(all, lipgloss.NewStyle().Width(leftW).Render(ll)+sep+rl)
+	}
+	all = append(all, FooterStyle.Width(m.width).Render("t shell  g refresh git  Esc volver  Ctrl+Q salir"))
+
+	if len(all) > h {
+		all = all[:h]
+	}
+	return strings.Join(all, "\n")
+}
+
+// buildCodingRightPanel construye el panel derecho de viewCodingDetail.
+// Muestra git log + status (con timeout 1s, fallback a m.multiDetailGitLines)
+// y la info del worktree (path + tecla t).
+func (m Model) buildCodingRightPanel(worktreePath string, w, h int) []string {
+	var lines []string
+
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		lines = append(lines, " "+DimText.Render("worktree no disponible"))
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		if len(lines) > h {
+			lines = lines[:h]
+		}
+		return lines
+	}
+
+	// Obtener info git con timeout
+	gitLines := m.fetchCodingGitLines(worktreePath)
+
+	// Reservar 3 líneas para el panel terminal al fondo
+	termH := 3
+	gitPanelH := h - termH
+	if gitPanelH < 2 {
+		gitPanelH = 2
+	}
+
+	// Panel git
+	lines = append(lines, " "+SectionHeader.Render("GIT"))
+	maxLineW := w - 2
+	if maxLineW < 1 {
+		maxLineW = 1
+	}
+	for _, gl := range gitLines {
+		if len(lines) >= gitPanelH {
+			break
+		}
+		r := []rune(gl)
+		if len(r) > maxLineW {
+			gl = string(r[:maxLineW-1]) + "…"
+		}
+		lines = append(lines, " "+DimText.Render(gl))
+	}
+
+	// Relleno hasta el límite del panel git
+	for len(lines) < gitPanelH {
+		lines = append(lines, "")
+	}
+
+	// Panel terminal
+	lines = append(lines, " "+SepDim.Render(strings.Repeat("─", w-2)))
+	pathStr := worktreePath
+	r := []rune(pathStr)
+	if len(r) > maxLineW {
+		pathStr = "…" + string(r[len(r)-maxLineW+1:])
+	}
+	lines = append(lines, " "+DimText.Render(pathStr))
+	lines = append(lines, " "+ViewActive.Render("t")+" "+DimText.Render("→ abrir shell"))
+
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+// fetchCodingGitLines ejecuta git log y git status síncronos con timeout 1s cada uno.
+// Si ambos fallan, retorna m.multiDetailGitLines como fallback.
+func (m Model) fetchCodingGitLines(worktreePath string) []string {
+	runGit := func(args ...string) []byte {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		out, _ := osexec.CommandContext(ctx, "git", append([]string{"-C", worktreePath}, args...)...).Output()
+		return out
+	}
+
+	logOut := runGit("log", "--oneline", "-10")
+	statusOut := runGit("status", "--short")
+
+	if len(logOut) == 0 && len(statusOut) == 0 {
+		return m.multiDetailGitLines
+	}
+
+	var result []string
+	for _, l := range strings.Split(strings.TrimRight(string(logOut), "\n"), "\n") {
+		if l != "" {
+			result = append(result, l)
+		}
+	}
+	if trimmed := strings.TrimSpace(string(statusOut)); trimmed != "" {
+		result = append(result, "──")
+		for _, l := range strings.Split(strings.TrimRight(string(statusOut), "\n"), "\n") {
+			if l != "" {
+				result = append(result, l)
+			}
+		}
+	}
+	return result
 }
 
 func formatTaskDate(created string) string {
