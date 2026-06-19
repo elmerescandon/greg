@@ -1069,9 +1069,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if ct.Preset == "coding" {
 					worktreePath := "/tmp/greg-worktree-" + ct.TaskID
 					if _, err := os.Stat(worktreePath); err == nil {
+						gregPane, _ := osexec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
+						gregPaneID := strings.TrimSpace(string(gregPane))
 						out, err := osexec.Command("tmux", "split-window", "-v", "-l", "30%", "-P", "-F", "#{pane_id}", "-c", worktreePath).Output()
 						if err == nil {
 							m.codingTermPaneID = strings.TrimSpace(string(out))
+							osexec.Command("tmux", "select-pane", "-t", gregPaneID).Run()
+							alias := fmt.Sprintf("alias t='tmux select-pane -t %s'", gregPaneID)
+							osexec.Command("tmux", "send-keys", "-t", m.codingTermPaneID, alias, "Enter").Run()
 						}
 					}
 				}
