@@ -7,12 +7,18 @@ import (
 )
 
 type Summary struct {
-	MonthSessions int
-	MonthCost     float64
-	WeekSessions  int
-	WeekCost      float64
-	TodaySessions int
-	TodayCost     float64
+	MonthSessions      int
+	MonthCost          float64
+	MonthInputTokens   int
+	MonthOutputTokens  int
+	WeekSessions       int
+	WeekCost           float64
+	WeekInputTokens    int
+	WeekOutputTokens   int
+	TodaySessions      int
+	TodayCost          float64
+	TodayInputTokens   int
+	TodayOutputTokens  int
 }
 
 func AllSessions() []session.Session {
@@ -60,6 +66,32 @@ func HourlyCostDist(sessions []session.Session) [24]float64 {
 	return dist
 }
 
+// HourlyInputTokensDist returns total input tokens per hour.
+func HourlyInputTokensDist(sessions []session.Session) [24]float64 {
+	var dist [24]float64
+	for _, s := range sessions {
+		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
+		if err != nil {
+			continue
+		}
+		dist[t.Hour()] += float64(s.InputTokens)
+	}
+	return dist
+}
+
+// HourlyOutputTokensDist returns total output tokens per hour.
+func HourlyOutputTokensDist(sessions []session.Session) [24]float64 {
+	var dist [24]float64
+	for _, s := range sessions {
+		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
+		if err != nil {
+			continue
+		}
+		dist[t.Hour()] += float64(s.OutputTokens)
+	}
+	return dist
+}
+
 func GetSummary(sessions []session.Session) Summary {
 	var s Summary
 	now := time.Now()
@@ -80,14 +112,20 @@ func GetSummary(sessions []session.Session) Summary {
 		if !t.Before(monthStart) {
 			s.MonthSessions++
 			s.MonthCost += sess.CostUSD
+			s.MonthInputTokens += sess.InputTokens
+			s.MonthOutputTokens += sess.OutputTokens
 		}
 		if !t.Before(weekStart) {
 			s.WeekSessions++
 			s.WeekCost += sess.CostUSD
+			s.WeekInputTokens += sess.InputTokens
+			s.WeekOutputTokens += sess.OutputTokens
 		}
 		if !t.Before(todayStart) {
 			s.TodaySessions++
 			s.TodayCost += sess.CostUSD
+			s.TodayInputTokens += sess.InputTokens
+			s.TodayOutputTokens += sess.OutputTokens
 		}
 	}
 	return s
