@@ -793,7 +793,11 @@ func (m Model) buildCodingRightPanel(worktreePath string, w, h int) []string {
 		pathStr = "…" + string(r[len(r)-maxLineW+1:])
 	}
 	lines = append(lines, " "+DimText.Render(pathStr))
-	lines = append(lines, " "+ViewActive.Render("t")+" "+DimText.Render("→ abrir shell"))
+	termHint := "→ abrir shell"
+	if m.codingTermPaneID != "" {
+		termHint = "→ enfocar terminal ↓"
+	}
+	lines = append(lines, " "+ViewActive.Render("t")+" "+DimText.Render(termHint))
 
 	if len(lines) > h {
 		lines = lines[:h]

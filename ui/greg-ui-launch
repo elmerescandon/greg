@@ -1,0 +1,5 @@
+#!/bin/zsh
+if [ -z "$TMUX" ]; then
+    exec tmux new-session -A -s greg "$0" "$@"
+fi
+exec /Users/arkangelai/Documents/greg/ui/greg-ui "$@"
