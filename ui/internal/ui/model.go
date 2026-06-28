@@ -102,10 +102,9 @@ type EffortOption struct {
 }
 
 var ModelOptions = []ModelOption{
-	{"claude-opus-4-6", "Opus 4.6", "1M ctx · máxima calidad", 1_000_000},
-	{"claude-opus-4-7", "Opus 4.7", "200k ctx · más reciente", 200_000},
-	{"claude-sonnet-4-6", "Sonnet 4.6", "balanceado · rápido", 200_000},
-	{"claude-haiku-4-5-20251001", "Haiku 4.5", "económico · muy rápido", 200_000},
+	{"claude-opus-4-8", "Opus 4.8", "1M ctx · el más capaz", 1_000_000},
+	{"claude-sonnet-4-6", "Sonnet 4.6", "1M ctx · rápido", 1_000_000},
+	{"claude-haiku-4-5-20251001", "Haiku 4.5", "200k ctx · económico", 200_000},
 }
 
 var EffortOptions = []EffortOption{
@@ -538,6 +537,29 @@ func (m *Model) showQuestion(id string, questions []claude.Question, t *Tab) {
 	t.Lines = append(t.Lines, "")
 }
 
+func (m *Model) showModelSelection(t *Tab) {
+	opts := make([]claude.Option, len(ModelOptions))
+	for i, mo := range ModelOptions {
+		opts[i] = claude.Option{Label: mo.Label, Description: mo.Desc}
+	}
+	selectedIdx := 0
+	for i, mo := range ModelOptions {
+		if mo.ID == t.Model {
+			selectedIdx = i
+			break
+		}
+	}
+	t.PendingQuestion = &PendingQuestion{
+		ID:          "__model__",
+		Questions:   []claude.Question{{Question: "¿Qué modelo quieres usar?", Header: "Modelo", Options: opts}},
+		CurrentQ:    0,
+		SelectedIdx: selectedIdx,
+		Answers:     make(map[string]string),
+	}
+	t.Lines = append(t.Lines, UserMessage.Render("? ¿Qué modelo quieres usar?"))
+	t.Lines = append(t.Lines, "")
+}
+
 func (m *Model) showConfigSelection(t *Tab) {
 	modelQs := make([]claude.Option, len(ModelOptions))
 	for i, mo := range ModelOptions {
@@ -620,6 +642,27 @@ func (m *Model) submitAnswer() tea.Cmd {
 	selected := qData.Options[q.SelectedIdx]
 	q.Answers[qData.Question] = selected.Label
 	t.Lines = append(t.Lines, QuestionSelected.Render("  ✓ "+selected.Label))
+
+	if q.ID == "__model__" {
+		t.PendingQuestion = nil
+		for _, mo := range ModelOptions {
+			if mo.Label == selected.Label {
+				t.Model = mo.ID
+				break
+			}
+		}
+		m.showQuestion("__mode__", []claude.Question{
+			{
+				Question: "¿Qué tipo de sesión?",
+				Header:   "Modo",
+				Options: []claude.Option{
+					{Label: "Chat"},
+					{Label: "Coding"},
+				},
+			},
+		}, t)
+		return nil
+	}
 
 	if q.ID == "__mode__" {
 		t.PendingQuestion = nil
@@ -744,16 +787,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		newT.Effort = m.cfg.DefaultEffort
 		m.tabs = append(m.tabs, newT)
 		m.tabIdx = len(m.tabs) - 1
-		m.showQuestion("__mode__", []claude.Question{
-			{
-				Question: "¿Qué tipo de sesión?",
-				Header:   "Modo",
-				Options: []claude.Option{
-					{Label: "Chat"},
-					{Label: "Coding"},
-				},
-			},
-		}, newT)
+		m.showModelSelection(newT)
 		return m, nil
 
 	case "ctrl+w":
