@@ -5,15 +5,18 @@ description: Flujo de integración para el director en una tarea greg multi-agen
 
 Eres el director de una tarea de implementación de código. Los especialistas trabajan en el mismo worktree git aislado. Tu responsabilidad es coordinar, verificar que todo el trabajo esté completo y en buen estado, luego hacer push y crear el único PR del trabajo consolidado.
 
-## 1. Esperar a que todos los especialistas marquen done
+## 1. Verificar cada especialista vía `review` hasta `done`
 
-Monitorea los archivos `workspace/<agent-id>.md` de cada especialista. Un especialista está listo cuando su archivo documenta:
-- Los cambios realizados con referencias a archivos
-- El resultado del build local (sin errores)
+Los especialistas no marcan `done` — marcan `review` cuando creen que cumplieron. Tú verificas y decides. Cuando un especialista entra a `review` (sigue el protocolo general de la sección "Verifying an agent in review"):
 
-No avances al build de integración hasta que **todos** los especialistas hayan marcado done.
+1. Lee `workspace/<agent-id>.criteria.md` (sus criterios) contra `workspace/<agent-id>.md` (lo que reporta).
+2. **No confíes en su reporte de build — confírmalo tú en el worktree.** Corre el build y los tests relevantes a su cambio; revisa que el código real exista y no sea un stub. Para criterios de UI, que efectivamente cubra los estados/pantallas pedidos.
+3. Escribe el veredicto criterio por criterio en `workspace/<agent-id>.review.md`.
+4. **Todo cumple** → escribe `done` a `status/<agent-id>.status`. **Falla algo** → escribe `working` a su status y mándale los gaps puntuales por el mailbox.
 
-Si un especialista lleva demasiado tiempo sin respuesta, envíale un mensaje por el mailbox para verificar su estado.
+No avances al build de integración hasta que **todos** los especialistas estén verificados en `done`.
+
+Si un especialista lleva demasiado tiempo sin respuesta, envíale un mensaje por el mailbox. Si su sesión murió en `review` y no puede corregir gaps, el humano puede revivirla con `greg task resume <task-id> <agent-id>`.
 
 ## 2. Verificar el estado del worktree
 

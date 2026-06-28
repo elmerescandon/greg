@@ -117,7 +117,8 @@ _coordinator_loop() {
   local agent_ids=("$@")
 
   local status_dir="${workspace}/status"
-  # Timeout: if a tmux session is dead and agent has output, treat as done after this many seconds
+  # Timeout: if a tmux session is dead and agent has output, move it to `review` after this
+  # many seconds — never straight to `done`, so the director still verifies crashed work.
   local dead_session_timeout=120
   # Track first-dead timestamps as "aid:timestamp" entries in a plain string
   local first_dead_list=""
@@ -137,6 +138,12 @@ _coordinator_loop() {
       [[ -f "$sf" ]] && agent_status=$(cat "$sf" 2>/dev/null | tr -d '[:space:]')
 
       if [[ "$agent_status" == "done" ]]; then
+        continue
+      fi
+
+      # In `review` — it's the director's call now. Keep the task open, don't force anything.
+      if [[ "$agent_status" == "review" ]]; then
+        all_done=false
         continue
       fi
 
@@ -166,9 +173,9 @@ _coordinator_loop() {
         else
           local elapsed=$(( now - fd_time ))
           if [[ $elapsed -ge $dead_session_timeout ]]; then
-            echo "[$(date '+%H:%M:%S')] ${aid}: timeout reached — forcing status to done" \
+            echo "[$(date '+%H:%M:%S')] ${aid}: timeout reached — moving status to review (director must verify)" \
               >> "${workspace}/coordinator.log"
-            echo "done" > "$sf"
+            echo "review" > "$sf"
             continue
           fi
         fi
@@ -625,8 +632,11 @@ cmd_task() {
 greg task — multi-agent task runner
 
   task run --goal "..." --agent "id:role description" [--agent ...]
+           [--criteria-file "id:/path/to/criteria.md" ...] [--preset coding|research]
            Launch a multi-agent task.
            Agent format: "<id>:<role description>"
+           Criteria: one acceptance-criteria file per agent — the contract the
+                     director verifies against before an agent can reach `done`.
 
   task status <task-id>                  Show current agent statuses
   task list                              List all multi-agent tasks
@@ -645,14 +655,16 @@ _task_run() {
   local preset=""
   local model_id=""
   local -a agent_specs=()
+  local -a criteria_specs=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --goal|-g)  goal="$2";                            shift 2 ;;
-      --agent|-a) agent_specs+=("$2");                  shift 2 ;;
-      --dir|-d)   dir="$2";                             shift 2 ;;
-      --preset)   preset="$2";                          shift 2 ;;
-      --model|-m) model_id="$(_resolve_model "$2")";   shift 2 ;;
+      --goal|-g)          goal="$2";                            shift 2 ;;
+      --agent|-a)         agent_specs+=("$2");                  shift 2 ;;
+      --criteria-file|-c) criteria_specs+=("$2");               shift 2 ;;
+      --dir|-d)           dir="$2";                             shift 2 ;;
+      --preset)           preset="$2";                          shift 2 ;;
+      --model|-m)         model_id="$(_resolve_model "$2")";   shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
   done
@@ -670,6 +682,27 @@ _task_run() {
   local task_id="mtask-$(_short_id)"
   local workspace="${MULTI_TASKS_DIR}/${task_id}"
   mkdir -p "${workspace}/workspace" "${workspace}/messages" "${workspace}/status"
+
+  # ── Acceptance criteria: write one file per agent BEFORE spawning ────────────
+  # Format: --criteria-file "<agent-id>:<path-to-md>". Each becomes
+  # workspace/workspace/<agent-id>.criteria.md, the contract the director verifies against.
+  for cspec in "${criteria_specs[@]}"; do
+    local cid="${cspec%%:*}"
+    local cpath="${cspec#*:}"
+    # Validate the id matches a declared specialist agent
+    local matched=false
+    for aspec in "${agent_specs[@]}"; do
+      [[ "${aspec%%:*}" == "$cid" ]] && matched=true && break
+    done
+    if [[ "$matched" == false ]]; then
+      echo "Error: --criteria-file id '$cid' does not match any --agent" >&2; exit 1
+    fi
+    if [[ ! -f "$cpath" ]]; then
+      echo "Error: --criteria-file path not found for '$cid': $cpath" >&2; exit 1
+    fi
+    cp "$cpath" "${workspace}/workspace/${cid}.criteria.md"
+    echo "criteria ${cid} → workspace/${cid}.criteria.md"
+  done
 
   # ── PRESET coding: crear worktree git aislado ────────────────────────────────
   local agent_spawn_dir="$workspace"
@@ -834,14 +867,23 @@ _task_status() {
   echo "Agents:"
 
   local wmf="${workspace}/manifest.json"
+  local in_review=0
   while IFS=$'\t' read -r aid arole sid; do
     local status_file="${workspace}/status/${aid}.status"
     local agent_status="(not started)"
     [[ -f "$status_file" ]] && agent_status=$(cat "$status_file" | tr -d '[:space:]')
+    [[ "$agent_status" == "review" ]] && in_review=$(( in_review + 1 ))
     local tmux_status=""
     tmux has-session -t "$sid" 2>/dev/null && tmux_status=" (tmux: running)" || tmux_status=" (tmux: stopped)"
     printf "  %-16s %-12s %-20s %s\n" "$aid" "[$agent_status]" "${sid}${tmux_status}" "$arole"
   done < <(jq -r '.agents[] | [.id, .role, (.session_id // "?")] | @tsv' "$wmf" 2>/dev/null)
+
+  # Hint when work is awaiting the director's verification gate
+  if [[ $in_review -gt 0 ]]; then
+    echo ""
+    echo "${in_review} agent(s) in review — director is verifying against acceptance criteria."
+    echo "  verdicts: ${workspace}/workspace/<agent-id>.review.md"
+  fi
 
   # Show final output if exists
   local final="${workspace}/final-output.md"

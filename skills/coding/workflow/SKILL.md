@@ -34,9 +34,11 @@ git checkout -b <prefijo>/<descripción-corta-en-kebab-case>
 - Si modificas una interfaz o contrato que usa otro especialista, notifícalo **antes** de hacer commit.
 - Si encuentras un bug fuera de tu scope, anótalo en `workspace/bugs-encontrados.md` — no lo arregles tú a menos que el director te lo asigne.
 
-## 3. Build local — obligatorio antes de marcar done
+## 3. Tests y build — obligatorio antes de entrar a `review`
 
-Detecta el stack y corre el comando correcto. **Si el build falla, para. Corrige y vuelve a correr. No marques done con build roto.**
+**Código nuevo sin tests no está terminado.** No basta con que "los tests relevantes pasen" — si agregaste comportamiento, escribe los tests que lo cubren. Un cambio que debería ser una implementación real y sale como un stub de cinco líneas **falla la revisión**.
+
+Detecta el stack y corre el comando correcto. **Si el build o los tests fallan, para. Corrige y vuelve a correr. No entres a `review` con build roto o tests en rojo.**
 
 | Stack | Comando de build | Comando de test |
 |-------|-----------------|-----------------|
@@ -48,13 +50,16 @@ Detecta el stack y corre el comando correcto. **Si el build falla, para. Corrige
 
 Si no hay un comando de build obvio → pregunta al director antes de asumir.
 
-Checklist antes de marcar done:
-1. Build pasa sin errores ni warnings nuevos
-2. Tests relevantes a tu cambio pasan
-3. `git diff HEAD` limpio — sin código de debug, sin `console.log`, sin TODOs sin resolver, sin cambios no intencionales
-4. Si añadiste dependencias, están declaradas en el archivo correcto (`go.mod`, `package.json`, etc.)
+Checklist antes de marcar `review` (además de tus criterios de aceptación):
+1. **Cada criterio de `workspace/<tu-id>.criteria.md` está realmente implementado** — no un esqueleto que aparenta completitud
+2. Escribiste tests para el comportamiento nuevo y **pasan**
+3. Build pasa sin errores ni warnings nuevos
+4. `git diff HEAD` limpio — sin código de debug, sin `console.log`, sin TODOs sin resolver, sin cambios no intencionales
+5. Si añadiste dependencias, están declaradas en el archivo correcto (`go.mod`, `package.json`, etc.)
 
-**No hagas push ni crees PR.** El director consolida el trabajo de todos los especialistas y hace push + PR una vez que todos están listos.
+Recuerda: tú marcas `review`, no `done`. El director verifica este checklist y tus criterios antes de pasarte a `done`. Si algo falla, te regresa a `working` con los gaps puntuales.
+
+**No hagas push ni crees PR.** El director consolida el trabajo de todos los especialistas y hace push + PR una vez que todos están verificados.
 
 ## 4. Reporte en workspace
 
