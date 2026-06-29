@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-06-28
+
+Ciclo de vida de agentes `working → review → done` con criterios de aceptación verificados por el director. Cierra el problema de fondo: los agentes declaraban `done` prematuramente contra una vara difusa, lo que obligaba a corregir el resultado al final.
+
+### Added
+
+**CLI**
+- `greg task run --criteria-file "<id>:<path>"` (repetible) — copia un archivo de criterios de aceptación por agente a `workspace/<id>.criteria.md` **antes** del spawn; valida que el `<id>` coincida con un `--agent` y que el archivo exista
+- `greg task status` muestra un hint cuando hay agentes en `review` (el director está verificando) y apunta a los veredictos `workspace/<id>.review.md`
+
+**Estado**
+- Nuevo estado `review`: un especialista entra a `review` cuando cree que cumplió; el director lo verifica contra sus criterios y lo pasa a `done` o lo regresa a `working` con los gaps
+
+### Changed
+
+**CLI**
+- El coordinator ya no fuerza `done` por timeout en sesiones muertas — ahora las mueve a `review` para que el director verifique igual (sin bypass de la compuerta)
+
+**Skills**
+- `agents/mailbox.md`, `agents/teammate.md` — los especialistas marcan `review`, nunca `done`; re-lectura obligatoria de `<id>.criteria.md` antes de revisar; vara explícita contra el satisficing
+- `agents/director.md` — nueva responsabilidad central: verificar cada `review` criterio por criterio, escribir veredicto a `<id>.review.md`, y ser dueño de la transición a `done`; el director está exento de review
+- `coding/workflow/SKILL.md` — tests obligatorios para código nuevo; checklist de completitud (no solo higiene) antes de `review`
+- `coding/director/SKILL.md` — el director confirma build/tests por especialista durante la verificación de `review`
+- `human/greg-task/SKILL.md` — el diseño de tarea ahora elicita criterios de aceptación grado-issue por agente (metodología de `coding/issue`) y los pasa con `--criteria-file`
+
 ## [0.4.10] - 2026-06-17
 
 ### Added

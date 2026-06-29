@@ -263,6 +263,6 @@ func InitStyles(dark bool) {
 		BorderForeground(lipgloss.Color(colorBorder)).
 		Padding(0, 1)
 	cardLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
-	cardValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan)).Bold(true)
+	cardValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan))
 	cardCostStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
 }
