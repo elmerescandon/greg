@@ -32,109 +32,70 @@ func deltaLabel(current, prev float64) (string, bool) {
 	return fmt.Sprintf("▼ %.0f%%", -pct), true // baja → verde
 }
 
-func daysInMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+func fmtTokMetric(n int) string {
+	if n >= 1_000_000_000 {
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
+	}
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
-func renderSummaryCards(sum metrics.Summary, allSess []session.Session, width int) string {
-	now := time.Now()
-
-	// Calcular costos del día anterior y semana anterior para deltas
-	yesterdayStart := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location())
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	weekday := int(now.Weekday())
-	if weekday == 0 {
-		weekday = 7
+func renderSummaryCards(sum metrics.Summary, _ []session.Session, width int) string {
+	sep := " " + SepDim.Render("│") + " "
+	sepW := 3
+	colW := (width - 2*sepW) / 3
+	if colW < 12 {
+		colW = 12
 	}
-	weekStart := time.Date(now.Year(), now.Month(), now.Day()-weekday+1, 0, 0, 0, 0, now.Location())
-	prevWeekStart := weekStart.AddDate(0, 0, -7)
 
-	var prevDayCost float64
-	var prevDaySess int
-	var prevWeekCost float64
-	var prevWeekSess int
-	for _, s := range allSess {
-		t, err := time.Parse("2006-01-02 15:04:05", s.Started)
-		if err != nil {
-			continue
-		}
-		if !t.Before(yesterdayStart) && t.Before(todayStart) {
-			prevDayCost += s.CostUSD
-			prevDaySess++
-		}
-		if !t.Before(prevWeekStart) && t.Before(weekStart) {
-			prevWeekCost += s.CostUSD
-			prevWeekSess++
+	// No bold — some terminals render bold glyphs slightly wider, shifting the separator.
+	// Use Width(colW) so lipgloss owns the padding logic.
+	tokStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCyan))
+
+	cell := func(style lipgloss.Style, content string) string {
+		return style.Width(colW).Render(content)
+	}
+
+	buildTokLines := func(label string, total, in, out, sess int) [4]string {
+		return [4]string{
+			cell(cardLabelStyle, label),
+			cell(tokStyle, fmtTokMetric(total)+" tok"),
+			cell(DimText, fmt.Sprintf("%s in · %s out", fmtTokMetric(in), fmtTokMetric(out))),
+			cell(DimText, fmt.Sprintf("%d sess", sess)),
 		}
 	}
-	_ = prevDaySess
-	_ = prevWeekSess
 
-	// Proyección: burn diario × días del mes
-	daysElapsed := float64(now.Day())
-	burnPerDay := sum.MonthCost / daysElapsed
-	totalDays := float64(daysInMonth(now.Year(), now.Month()))
-	projection := burnPerDay * totalDays
-
-	type cardData struct {
-		label    string
-		cost     float64
-		sessions int
-		prevCost float64
-		isProj   bool
-		projEst  float64
-		burn     float64
-	}
-	cards := []cardData{
-		{"Hoy", sum.TodayCost, sum.TodaySessions, prevDayCost, false, 0, 0},
-		{"Semana", sum.WeekCost, sum.WeekSessions, prevWeekCost, false, 0, 0},
-		{"Mes", sum.MonthCost, sum.MonthSessions, sum.PrevCost, false, 0, 0},
-		{"Proyección", 0, 0, 0, true, projection, burnPerDay},
-	}
-
-	gap := 2
-	cardW := (width - gap*3) / 4
-	if cardW < 16 {
-		cardW = 16
-	}
-
-	var rendered []string
-	for _, c := range cards {
-		var content string
-		label := cardLabelStyle.Render(c.label)
-
-		if c.isProj {
-			est := cardValueStyle.Render(fmt.Sprintf("~$%.2f", c.projEst))
-			burn := DimText.Render(fmt.Sprintf("$%.2f/día", c.burn))
-			content = label + "\n" + est + "\n" + burn + "\n "
-		} else {
-			costStr := cardCostStyle.Render(fmt.Sprintf("$%.2f", c.cost))
-			sessStr := DimText.Render(fmt.Sprintf("%d sess", c.sessions))
-			var perSess string
-			if c.sessions > 0 {
-				perSess = DimText.Render(fmt.Sprintf("$%.2f/sess", c.cost/float64(c.sessions)))
-			} else {
-				perSess = DimText.Render("—")
-			}
-			d, green := deltaLabel(c.cost, c.prevCost)
-			var deltaStr string
-			if d != "" {
-				if green {
-					deltaStr = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGreen)).Render(d)
-				} else {
-					deltaStr = lipgloss.NewStyle().Foreground(lipgloss.Color(colorRed)).Render(d)
-				}
-			} else {
-				deltaStr = " "
-			}
-			content = label + "\n" + costStr + "  " + sessStr + "\n" + perSess + "\n" + deltaStr
+	buildMesLines := func(total, in, out int, cost float64, sess int) [4]string {
+		costLine := fmt.Sprintf("$%.2f", cost)
+		if sess > 0 {
+			costLine = fmt.Sprintf("$%.2f  %d sess", cost, sess)
 		}
-		rendered = append(rendered, cardStyle.Width(cardW).Render(content))
+		return [4]string{
+			cell(cardLabelStyle, "Mes"),
+			cell(tokStyle, fmtTokMetric(total)+" tok"),
+			cell(DimText, fmt.Sprintf("%s in · %s out", fmtTokMetric(in), fmtTokMetric(out))),
+			cell(cardCostStyle, costLine),
+		}
 	}
 
-	sep := strings.Repeat(" ", gap)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		rendered[0], sep, rendered[1], sep, rendered[2], sep, rendered[3])
+	todayTok := sum.TodayInputTokens + sum.TodayOutputTokens
+	weekTok := sum.WeekInputTokens + sum.WeekOutputTokens
+	monthTok := sum.MonthInputTokens + sum.MonthOutputTokens
+
+	c1 := buildTokLines("Hoy", todayTok, sum.TodayInputTokens, sum.TodayOutputTokens, sum.TodaySessions)
+	c2 := buildTokLines("Semana", weekTok, sum.WeekInputTokens, sum.WeekOutputTokens, sum.WeekSessions)
+	c3 := buildMesLines(monthTok, sum.MonthInputTokens, sum.MonthOutputTokens, sum.MonthCost, sum.MonthSessions)
+
+	var rows []string
+	for i := 0; i < 4; i++ {
+		rows = append(rows, c1[i]+sep+c2[i]+sep+c3[i])
+	}
+	return strings.Join(rows, "\n")
 }
 
 // ── Bloque 2: panel 50/50 ─────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ greg spawns multiple Claude Code agents that work **in parallel** on a shared wo
 - **Shared workspace** — agents read and reference each other's outputs as they write; no copy-paste, no handoffs
 - **Automatic director** — a coordinator agent is injected into every task to monitor progress, unblock teammates, and produce synthesis notes
 - **Monitor without interrupting** — `greg peek` shows you what any agent (or all agents in a task) is doing right now, without attaching to their session
-- **Fault tolerant** — if an agent's session crashes before writing `done`, the coordinator detects it and auto-completes after 120 seconds
+- **Fault tolerant** — if an agent's session crashes before writing `done`, the coordinator moves it to `review` after 120 seconds so the director can verify before closing
 - **Terminal-native** — bash CLI + Go TUI, no external services, no API keys beyond Claude Code itself
 
 ## Quick start
@@ -67,7 +67,7 @@ greg cancel <task-id>                               # cancel a scheduled task
 ### Multi-agent tasks
 
 ```bash
-greg task run --goal "..." --agent "id:role" [--agent ...] [--preset coding|research] [--model alias|id]
+greg task run --goal "..." --agent "id:role" [--agent ...] [--criteria-file "id:/path/to/criteria.md" ...] [--preset coding|research] [--model alias|id]
 greg task status <task-id>                # per-agent status, coordinator health, tmux state
 greg task list                            # all tasks with statuses
 greg peek <task-id> [-n 30]               # tail all agents at once
@@ -108,7 +108,7 @@ greg check-msgs --agent <id> --workspace <path>                     # drain unre
     director→americas.md
   status/
     director.status                # working | waiting | needs-help | done
-    americas.status
+    americas.status                # working | waiting | needs-help | review | done
     ...
 ```
 
@@ -117,7 +117,8 @@ greg check-msgs --agent <id> --workspace <path>                     # drain unre
 3. Agents write to `workspace/<agent-id>.md` progressively — teammates can read in real time
 4. Agents communicate via `greg send-msg` — each message is appended with a timestamp; `greg wait-msg` blocks deterministically on `fswatch` until a reply arrives; `greg check-msgs` drains unread messages
 5. A background **coordinator** process polls `status/` files every 15 seconds
-6. When all agents (including the director) write `done`, the coordinator closes the task
+6. When a specialist finishes, it moves to `review`; the director verifies against `<agent-id>.criteria.md` and writes a verdict to `<agent-id>.review.md`, then moves the agent to `done` (or back to `working` with gaps)
+7. When all agents write `done`, the coordinator closes the task
 
 ## Setup
 
